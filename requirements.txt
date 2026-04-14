@@ -1,0 +1,6 @@
+duckdb>=1.0.0
+python-dotenv>=1.0.0
+pyyaml>=6.0
+psycopg[binary]>=3.2.0
+pandas>=2.2.0
+wrds>=3.2.0

@@ -1,0 +1,68 @@
+wrds:
+  username_env: WRDS_USERNAME
+  password_env: WRDS_PASSWORD
+
+extract:
+  start_date: "2024-01-01"
+  end_date: "2026-03-31"
+  include_company_mapping: true
+  include_regions: true
+  limit_rows: null
+
+tables:
+  postings_cosmos:
+    schema: revelio_job_postings
+    table: postings_cosmos
+    date_column: post_date
+    partition_by:
+      - year
+      - month
+    select_columns:
+      - job_id
+      - rcid
+      - company
+      - country
+      - state
+      - metro_area
+      - role_k1500_v2
+      - role_k17000_v3
+      - onet_code
+      - salary
+      - salary_min
+      - salary_max
+      - salary_predicted
+      - post_date
+      - remove_date
+      - ultimate_parent_rcid
+      - ultimate_parent_company_name
+      - remote_type
+      - expected_hires
+      - source_company_sites
+      - source_linkedin
+      - source_indeed
+      - source_zhaopin
+      - source_51job
+      - source_liepin
+      - source_other_aggregators
+      - source_staffingfirms
+      - source_regional_aggregators
+
+  company_mapping:
+    schema: revelio_common
+    table: company_mapping
+    select_columns:
+      - rcid
+      - company
+      - ultimate_parent_rcid
+      - ultimate_parent_company_name
+      - naics_code
+      - rics_k50
+      - rics_k200
+      - rics_k400
+
+  regions:
+    schema: revelio_common
+    table: regions
+    select_columns:
+      - country
+      - region

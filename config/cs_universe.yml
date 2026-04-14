@@ -1,0 +1,24 @@
+version: "2026.04"
+description: "CS role and skill allowlists used for early filtering."
+
+# Use real WRDS taxonomy keys.
+# roles.role_id must match postings_cosmos.role_k17000_v3 exactly (not job titles).
+# Wrong strings yield zero rows in extract. Use DISTINCT role_k17000_v3 in WRDS to discover keys,
+# or run: python scripts/extract_wrds_cs_snapshot.py --no-role-filter --last-months 1
+
+roles: 
+  - role_id: "Software Engineering" # role_k17000_v3
+    role_name: "software engineer" # role_k1500_v2
+  - role_id: "Data Science Professional"
+    role_name: "data scientist"
+  - role_id: "Machine Learning Engineering"
+    role_name: "machine engineer"
+  - role_id: "Data Engineering Professional"
+    role_name: "data engineer"
+  - role_id: "Cyber Engineer"
+    role_name: "cyber security analyst"
+skills:
+  # Fill when structured skill keys are wired (e.g. individual_user_skills.skill_mapped).
+
+minimum_months_for_trajectory: 36
+min_row_threshold: 5

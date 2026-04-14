@@ -205,3 +205,8 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Data: ignore WRDS raw snapshot, processed outputs, local DuckDB; keep dev snapshot only
+data/*
+!data/dev_processed/
+!data/dev_processed/**
