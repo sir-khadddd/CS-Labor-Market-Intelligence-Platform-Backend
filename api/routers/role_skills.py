@@ -2,7 +2,8 @@
 
 from datetime import date
 from typing import Optional
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Depends 
+from psycopg import Connection 
 from api.schemas import RoleSkillAssociationResponse, RoleSkillAssociationRecord
 from api.dependencies import get_postgres_connection
 
@@ -17,9 +18,9 @@ async def get_role_skill_associations(
     sort_by: Optional[str] = Query("lift", regex="^(lift|co_occurrence_count|p_skill_given_role)$"),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
+    conn: Connection = Depends(get_postgres_connection), 
 ):
     """Get role-skill associations with optional filters."""
-    conn = get_postgres_connection()
     
     query = "SELECT * FROM analytics.role_skill_associations WHERE 1=1"
     params = []
@@ -60,6 +61,37 @@ async def get_role_skill_associations(
         offset=offset
     )
 
+@router.get("/strong-associations", response_model=RoleSkillAssociationResponse)
+async def get_strong_associations(
+    month: date = Query(...),
+    min_lift: float = Query(1.5, description="Minimum lift threshold"),
+    limit: int = Query(100, ge=1, le=1000),
+    conn: Connection = Depends(get_postgres_connection),
+):
+    """Get strongest role-skill associations above lift threshold."""
+
+    query = "SELECT * FROM analytics.role_skill_associations WHERE month = %s AND lift > %s"
+    params = [month, min_lift]
+
+    with conn.cursor() as cur:
+        cur.execute(f"SELECT COUNT(*) FROM ({query}) AS subq", params)
+        total = cur.fetchone()[0]
+
+        cur.execute(query + " ORDER BY lift DESC LIMIT %s", params + [limit])
+        rows = cur.fetchall()
+        columns = [desc[0] for desc in cur.description]
+
+    data = [
+        RoleSkillAssociationRecord(**dict(zip(columns, row))) for row in rows
+    ]
+
+    return RoleSkillAssociationResponse(
+        data=data,
+        total=total,
+        limit=limit,
+        offset=0
+    )
+
 
 @router.get("/{role_id}", response_model=RoleSkillAssociationResponse)
 async def get_skills_for_role(
@@ -68,9 +100,9 @@ async def get_skills_for_role(
     min_lift: float = Query(0, description="Minimum lift threshold"),
     sort_by: Optional[str] = Query("lift", regex="^(lift|co_occurrence_count|p_skill_given_role)$"),
     limit: int = Query(50, ge=1, le=1000),
+    conn: Connection = Depends(get_postgres_connection),
 ):
     """Get top skills for a specific role by association strength."""
-    conn = get_postgres_connection()
     
     query = "SELECT * FROM analytics.role_skill_associations WHERE role_id = %s"
     params = [role_id]
@@ -102,33 +134,4 @@ async def get_skills_for_role(
     )
 
 
-@router.get("/strong-associations", response_model=RoleSkillAssociationResponse)
-async def get_strong_associations(
-    month: date = Query(...),
-    min_lift: float = Query(1.5, description="Minimum lift threshold"),
-    limit: int = Query(100, ge=1, le=1000),
-):
-    """Get strongest role-skill associations above lift threshold."""
-    conn = get_postgres_connection()
-    
-    query = "SELECT * FROM analytics.role_skill_associations WHERE month = %s AND lift > %s"
-    params = [month, min_lift]
-    
-    with conn.cursor() as cur:
-        cur.execute(f"SELECT COUNT(*) FROM ({query}) AS subq", params)
-        total = cur.fetchone()[0]
-        
-        cur.execute(query + " ORDER BY lift DESC LIMIT %s", params + [limit])
-        rows = cur.fetchall()
-        columns = [desc[0] for desc in cur.description]
-    
-    data = [
-        RoleSkillAssociationRecord(**dict(zip(columns, row))) for row in rows
-    ]
-    
-    return RoleSkillAssociationResponse(
-        data=data,
-        total=total,
-        limit=limit,
-        offset=0
-    )
+
