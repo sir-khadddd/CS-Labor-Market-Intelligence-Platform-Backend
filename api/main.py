@@ -11,6 +11,7 @@ from api.routers.job_demand import router as job_demand_router
 from api.routers.skill_demand import router as skill_demand_router
 from api.routers.salary import router as salary_router
 from api.routers.role_skills import router as role_skills_router
+from api.routers.trajectory import router as trajectory_router
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,7 @@ def create_app() -> FastAPI:
     app.include_router(skill_demand_router)
     app.include_router(salary_router)
     app.include_router(role_skills_router)
+    app.include_router(trajectory_router)
 
     # Health check endpoint
     @app.get("/health", tags=["health"])
@@ -65,6 +67,7 @@ def create_app() -> FastAPI:
                 "skill_demand": "/api/v1/skill-demand",
                 "salary": "/api/v1/salaries",
                 "role_skills": "/api/v1/role-skills",
+                "trajectory": "/api/v1/trajectory",
             }
         }
 
