@@ -18,7 +18,10 @@ roles:
   - role_id: "Cyber Engineer"
     role_name: "cyber security analyst"
 skills:
-  # Fill when structured skill keys are wired (e.g. individual_user_skills.skill_mapped).
+  # Apr 2026+ Revelio taxonomy: skill_id = individual_user_skills.skill_k35000 (skill_mapped deprecated).
+  # Broader rollups: join individual_user_skill_lookup on skill_k35000 (e.g. skill_k15).
+  # Allowlist keys from: python scripts/discover_wrds_skills.py (monthly, see docs/skills_ingest_plan.md).
+  # Posting demand marts still need posting-level skills on postings_cosmos or a job bridge table.
 
-minimum_months_for_trajectory: 36
-min_row_threshold: 5
+minimum_months_for_trajectory: 36  # Target panel length; SQL currently uses 12-month warmup (see README → Trajectory ML)
+min_row_threshold: 5               # Dev snapshot export floor (make_dev_snapshot.py); does not affect Postgres trajectory row count
