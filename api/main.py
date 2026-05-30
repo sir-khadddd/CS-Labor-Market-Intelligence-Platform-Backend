@@ -1,15 +1,18 @@
 """FastAPI application factory and route registration."""
 
+import logging
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from api.routers import job_demand, skill_demand, salary, role_skills
-from api.dependencies import close_connections
+from api.dependencies import close_connections, get_postgres_health
 
 # Import routers
 from api.routers.job_demand import router as job_demand_router
 from api.routers.skill_demand import router as skill_demand_router
 from api.routers.salary import router as salary_router
 from api.routers.role_skills import router as role_skills_router
+
+logger = logging.getLogger(__name__)
 
 
 def create_app() -> FastAPI:
@@ -38,8 +41,17 @@ def create_app() -> FastAPI:
     # Health check endpoint
     @app.get("/health", tags=["health"])
     async def health_check():
-        """Health check endpoint."""
-        return {"status": "healthy"}
+        """Health check endpoint with Postgres status."""
+        postgres = get_postgres_health()
+        status = "healthy" if postgres.get("status") == "up" else "degraded"
+        return {"status": status, "postgres": postgres}
+
+    @app.get("/health/db", tags=["health"])
+    async def database_health_check():
+        """Detailed Postgres health including analytics table row counts."""
+        postgres = get_postgres_health(include_table_counts=True)
+        status = "healthy" if postgres.get("status") == "up" else "degraded"
+        return {"status": status, "postgres": postgres}
 
     # API info endpoint
     @app.get("/api/v1/info", tags=["info"])
@@ -55,6 +67,23 @@ def create_app() -> FastAPI:
                 "role_skills": "/api/v1/role-skills",
             }
         }
+
+    # Startup event
+    @app.on_event("startup")
+    async def startup_event():
+        """Log Postgres health when the API starts."""
+        postgres = get_postgres_health()
+        if postgres.get("status") == "up":
+            logger.info(
+                "API startup Postgres check passed database=%s latency_ms=%s",
+                postgres.get("database"),
+                postgres.get("latency_ms"),
+            )
+        else:
+            logger.warning(
+                "API startup Postgres check failed: %s",
+                postgres.get("error", "unknown error"),
+            )
 
     # Shutdown event
     @app.on_event("shutdown")
