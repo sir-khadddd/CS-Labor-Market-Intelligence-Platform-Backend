@@ -97,8 +97,8 @@ skills:
 ## Product honesty until ingest is wired
 
 - Treat `analytics.cs_skill_demand` and `role_skill_associations` as **non-production** while `skill_id = 'UNK'`.
-- Do not ship the Skillset dashboard entry as live data.
-- API may filter `skill_id NOT IN ('UNK', 'Unknown')` or expose `skills_status: placeholder` in `/api/v1/info`.
+- After keyword ingest is wired, label API responses `skills_status: inferred` (see `docs/skill_demand_methodology.md`).
+- Do not ship the Skillset dashboard entry as live data until non-UNK rows are loaded.
 
 ## Implementation phases
 

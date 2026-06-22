@@ -2,12 +2,37 @@
 
 from datetime import date
 from typing import Optional
-from fastapi import APIRouter, Query, Depends 
-from psycopg import Connection 
-from api.schemas import RoleSkillAssociationResponse, RoleSkillAssociationRecord
+
+from fastapi import APIRouter, Depends, Query
+from psycopg import Connection
+
 from api.dependencies import get_postgres_connection
+from api.schemas import RoleSkillAssociationResponse, RoleSkillAssociationRecord
+from api.skill_config import skill_filter_clause
 
 router = APIRouter(prefix="/api/v1/role-skills", tags=["role-skills"])
+
+
+def _fetch_role_skills(
+    conn: Connection,
+    *,
+    base_query: str,
+    params: list,
+    sort_by: str,
+    limit: int,
+    offset: int,
+) -> RoleSkillAssociationResponse:
+    count_query = f"SELECT COUNT(*) FROM ({base_query}) AS subq"
+    with conn.cursor() as cur:
+        cur.execute(count_query, params)
+        total = cur.fetchone()[0]
+
+        cur.execute(base_query + f" ORDER BY {sort_by} DESC LIMIT %s OFFSET %s", params + [limit, offset])
+        rows = cur.fetchall()
+        columns = [desc[0] for desc in cur.description]
+
+    data = [RoleSkillAssociationRecord(**dict(zip(columns, row))) for row in rows]
+    return RoleSkillAssociationResponse(data=data, total=total, limit=limit, offset=offset)
 
 
 @router.get("", response_model=RoleSkillAssociationResponse)
@@ -15,16 +40,16 @@ async def get_role_skill_associations(
     month: Optional[date] = Query(None),
     role_id: Optional[str] = Query(None),
     skill_id: Optional[str] = Query(None),
-    sort_by: Optional[str] = Query("lift", regex="^(lift|co_occurrence_count|p_skill_given_role)$"),
+    include_unknown: bool = Query(False, description="Include placeholder UNK/Unknown skill ids"),
+    sort_by: Optional[str] = Query("lift", pattern="^(lift|co_occurrence_count|p_skill_given_role)$"),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
-    conn: Connection = Depends(get_postgres_connection), 
+    conn: Connection = Depends(get_postgres_connection),
 ):
     """Get role-skill associations with optional filters."""
-    
-    query = "SELECT * FROM analytics.role_skill_associations WHERE 1=1"
-    params = []
-    
+    query = f"SELECT * FROM analytics.role_skill_associations WHERE {skill_filter_clause(include_unknown=include_unknown)}"
+    params: list = []
+
     if month:
         query += " AND month = %s"
         params.append(month)
@@ -34,62 +59,39 @@ async def get_role_skill_associations(
     if skill_id:
         query += " AND skill_id = %s"
         params.append(skill_id)
-    
-    # Get total count
-    count_query = f"SELECT COUNT(*) FROM ({query}) AS subq"
-    with conn.cursor() as cur:
-        cur.execute(count_query, params)
-        total = cur.fetchone()[0]
-    
-    # Get paginated results
-    query += f" ORDER BY {sort_by} DESC LIMIT %s OFFSET %s"
-    params.extend([limit, offset])
-    
-    with conn.cursor() as cur:
-        cur.execute(query, params)
-        rows = cur.fetchall()
-        columns = [desc[0] for desc in cur.description]
-    
-    data = [
-        RoleSkillAssociationRecord(**dict(zip(columns, row))) for row in rows
-    ]
-    
-    return RoleSkillAssociationResponse(
-        data=data,
-        total=total,
+
+    return _fetch_role_skills(
+        conn,
+        base_query=query,
+        params=params,
+        sort_by=sort_by,
         limit=limit,
-        offset=offset
+        offset=offset,
     )
+
 
 @router.get("/strong-associations", response_model=RoleSkillAssociationResponse)
 async def get_strong_associations(
     month: date = Query(...),
     min_lift: float = Query(1.5, description="Minimum lift threshold"),
+    include_unknown: bool = Query(False),
     limit: int = Query(100, ge=1, le=1000),
     conn: Connection = Depends(get_postgres_connection),
 ):
     """Get strongest role-skill associations above lift threshold."""
-
-    query = "SELECT * FROM analytics.role_skill_associations WHERE month = %s AND lift > %s"
+    query = (
+        f"SELECT * FROM analytics.role_skill_associations WHERE month = %s AND lift > %s "
+        f"AND {skill_filter_clause(include_unknown=include_unknown)}"
+    )
     params = [month, min_lift]
 
-    with conn.cursor() as cur:
-        cur.execute(f"SELECT COUNT(*) FROM ({query}) AS subq", params)
-        total = cur.fetchone()[0]
-
-        cur.execute(query + " ORDER BY lift DESC LIMIT %s", params + [limit])
-        rows = cur.fetchall()
-        columns = [desc[0] for desc in cur.description]
-
-    data = [
-        RoleSkillAssociationRecord(**dict(zip(columns, row))) for row in rows
-    ]
-
-    return RoleSkillAssociationResponse(
-        data=data,
-        total=total,
+    return _fetch_role_skills(
+        conn,
+        base_query=query,
+        params=params,
+        sort_by="lift",
         limit=limit,
-        offset=0
+        offset=0,
     )
 
 
@@ -98,40 +100,27 @@ async def get_skills_for_role(
     role_id: str,
     month: Optional[date] = Query(None),
     min_lift: float = Query(0, description="Minimum lift threshold"),
-    sort_by: Optional[str] = Query("lift", regex="^(lift|co_occurrence_count|p_skill_given_role)$"),
+    include_unknown: bool = Query(False),
+    sort_by: Optional[str] = Query("lift", pattern="^(lift|co_occurrence_count|p_skill_given_role)$"),
     limit: int = Query(50, ge=1, le=1000),
     conn: Connection = Depends(get_postgres_connection),
 ):
     """Get top skills for a specific role by association strength."""
-    
-    query = "SELECT * FROM analytics.role_skill_associations WHERE role_id = %s"
-    params = [role_id]
-    
+    query = (
+        f"SELECT * FROM analytics.role_skill_associations WHERE role_id = %s "
+        f"AND lift > %s AND {skill_filter_clause(include_unknown=include_unknown)}"
+    )
+    params: list = [role_id, min_lift]
+
     if month:
         query += " AND month = %s"
         params.append(month)
-    
-    query += " AND lift > %s"
-    params.append(min_lift)
-    
-    with conn.cursor() as cur:
-        cur.execute(f"SELECT COUNT(*) FROM ({query}) AS subq", params)
-        total = cur.fetchone()[0]
-        
-        cur.execute(query + f" ORDER BY {sort_by} DESC LIMIT %s", params + [limit])
-        rows = cur.fetchall()
-        columns = [desc[0] for desc in cur.description]
-    
-    data = [
-        RoleSkillAssociationRecord(**dict(zip(columns, row))) for row in rows
-    ]
-    
-    return RoleSkillAssociationResponse(
-        data=data,
-        total=total,
+
+    return _fetch_role_skills(
+        conn,
+        base_query=query,
+        params=params,
+        sort_by=sort_by,
         limit=limit,
-        offset=0
+        offset=0,
     )
-
-
-

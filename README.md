@@ -47,13 +47,13 @@ Approximate progress: **~90%** role demand stack, **~15%** inferred skill demand
 
 ### Next — inferred skill demand pilot (critical path for skillset views)
 
-- [ ] Add `config/skill_keywords.yml` — 50–200 `skill_k35000` terms + aliases; map to `skill_k15` via lookup
-- [ ] Job_id-limited extract of `postings_cosmos_raw` (`job_id`, `title_raw`, `description`) for CS postings only (do not bulk-pull full raw ~13TB; join dates from `postings_cosmos`)
-- [ ] DuckDB stage: posting text → keyword hits → `stage.posting_skill_hits` (or equivalent)
-- [ ] Wire hits into `build_duckdb.py` (replace `NULL` / `UNK` skills in staging) and rebuild `cs_skill_demand` / `role_skill_associations`
-- [ ] Re-run `validate_outputs.py` → `load_postgres.py`; confirm non-`UNK` skill rows and coverage stats
-- [ ] API honesty: `skills_status: inferred` on `/api/v1/info`; filter `UNK` by default; optional `skill_k15` rollup endpoints
-- [ ] Add `docs/skill_demand_methodology.md` (or section in `skills_ingest_plan.md`) for UI copy: inferred, CS role universe, keyword method
+- [x] Add `config/skill_keywords.yml` — 50–200 `skill_k35000` terms + aliases; map to `skill_k15` via lookup
+- [x] Job_id-limited extract of `postings_cosmos_raw` (`job_id`, `title_raw`, `description`) for CS postings only (do not bulk-pull full raw ~13TB; join dates from `postings_cosmos`)
+- [x] DuckDB stage: posting text → keyword hits → `stage.posting_skill_hits` (or equivalent)
+- [x] Wire hits into `build_duckdb.py` (replace `NULL` / `UNK` skills in staging) and rebuild `cs_skill_demand` / `role_skill_associations`
+- [x] Re-run `validate_outputs.py` → `load_postgres.py`; confirm non-`UNK` skill rows and coverage stats
+- [x] API honesty: `skills_status: inferred` on `/api/v1/info`; filter `UNK` by default; optional `skill_k15` rollup endpoints (rollup endpoints still optional)
+- [x] Add `docs/skill_demand_methodology.md` (or section in `skills_ingest_plan.md`) for UI copy: inferred, CS role universe, keyword method
 - [ ] Frontend (separate repo): Skillset demand charts — trend, geo map, role breakdown with methodology tooltips
 
 ### Parallel — role trajectory ML (does not block skill pilot)
@@ -69,7 +69,18 @@ Current state (smoke test only): with **5 roles** and a short extract, Postgres 
 
 #### Next steps for `config/cs_universe.yml`
 
-`cs_universe.yml` is the main lever for trajectory **volume** and dev-snapshot **thresholds**. Skills ingest is separate but uses the same file for the `skills:` block.
+`cs_universe.yml` now includes **15** CS `role_k17000_v3` buckets (5 original + 10 from WRDS discovery). To grow the trajectory panel beyond ~80 role-month rows, **re-run the extract pipeline** with the expanded allowlist:
+
+```bash
+python scripts/discover_role_candidates.py --write-candidates   # optional refresh
+python scripts/apply_role_candidates.py --min-score 2 --limit 10
+python scripts/extract_wrds_cs_snapshot.py
+python scripts/extract_wrds_cs_posting_text.py --resume
+python scripts/build_duckdb.py
+python scripts/load_postgres.py
+```
+
+`cs_universe.yml` is the main lever for trajectory **volume** and dev-snapshot **thresholds**. Skills ingest uses the same file for the `skills:` block.
 
 1. **Discover real role keys (monthly, after extract)**  
    - Run `python scripts/extract_wrds_cs_snapshot.py` (or `--no-role-filter --last-months 1` for discovery).  

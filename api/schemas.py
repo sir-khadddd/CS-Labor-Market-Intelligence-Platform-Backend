@@ -5,6 +5,16 @@ from typing import Optional, List
 from pydantic import BaseModel, Field
 
 
+class ApiInfoResponse(BaseModel):
+    """API metadata including skill demand lineage."""
+    name: str
+    version: str
+    skills_status: str
+    skills_method: str
+    skills_source: str
+    distinct_skills: Optional[int] = None
+    endpoints: dict[str, str]
+
 class PaginationParams(BaseModel):
     """Pagination parameters."""
     limit: int = Field(default=100, ge=1, le=1000)

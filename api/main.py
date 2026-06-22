@@ -2,9 +2,13 @@
 
 import logging
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from api.dependencies import close_connections, get_postgres_health
+from psycopg import Connection
+
+from api.dependencies import close_connections, get_postgres_connection, get_postgres_health
+from api.schemas import ApiInfoResponse
+from api.skill_config import SKILLS_METHOD, SKILLS_SOURCE, SKILLS_STATUS, skill_filter_clause
 
 # Import routers
 from api.routers.job_demand import router as job_demand_router
@@ -54,19 +58,34 @@ def create_app() -> FastAPI:
         return {"status": status, "postgres": postgres}
 
     # API info endpoint
-    @app.get("/api/v1/info", tags=["info"])
-    async def api_info():
+    @app.get("/api/v1/info", response_model=ApiInfoResponse, tags=["info"])
+    async def api_info(conn: Connection = Depends(get_postgres_connection)):
         """API information endpoint."""
-        return {
-            "name": "CS Labor Market Intelligence API",
-            "version": "1.0.0",
-            "endpoints": {
+        distinct_skills = None
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT COUNT(DISTINCT skill_id) FROM analytics.cs_skill_demand "
+                    f"WHERE {skill_filter_clause()}"
+                )
+                distinct_skills = cur.fetchone()[0]
+        except Exception:
+            logger.exception("Failed to count distinct skills for /api/v1/info")
+
+        return ApiInfoResponse(
+            name="CS Labor Market Intelligence API",
+            version="1.0.0",
+            skills_status=SKILLS_STATUS,
+            skills_method=SKILLS_METHOD,
+            skills_source=SKILLS_SOURCE,
+            distinct_skills=distinct_skills,
+            endpoints={
                 "job_demand": "/api/v1/job-demand",
                 "skill_demand": "/api/v1/skill-demand",
                 "salary": "/api/v1/salaries",
                 "role_skills": "/api/v1/role-skills",
-            }
-        }
+            },
+        )
 
     # Startup event
     @app.on_event("startup")
