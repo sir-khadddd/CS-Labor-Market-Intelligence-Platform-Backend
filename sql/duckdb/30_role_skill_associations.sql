@@ -5,7 +5,7 @@ WITH monthly AS (
         role_id,
         skill_id,
         COUNT(*) AS co_occurrence_count
-    FROM stage.cs_postings
+    FROM stage.skill_cs_postings
     GROUP BY 1, 2, 3
 ),
 rolling AS (

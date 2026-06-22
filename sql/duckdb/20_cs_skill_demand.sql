@@ -7,7 +7,7 @@ WITH skill_monthly AS (
         skill_id,
         any_value(skill_name) AS skill_name,
         SUM(posting_count) AS skill_posting_count
-    FROM stage.cs_postings
+    FROM stage.skill_cs_postings
     GROUP BY 1, 2, 3, 4
 ),
 role_totals AS (

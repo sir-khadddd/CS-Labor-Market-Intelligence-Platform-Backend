@@ -17,6 +17,7 @@ CREATE OR REPLACE TABLE stage.dim_skill AS
 SELECT DISTINCT skill_id, skill_name
 FROM stage.allowlist_skills;
 
+-- Job-level grain for role demand, salary, and trajectory inputs.
 CREATE OR REPLACE TABLE stage.base_postings AS
 SELECT
     date_trunc('month', CAST(post_date AS DATE))::DATE AS month,
@@ -26,12 +27,31 @@ SELECT
     COALESCE(industry_name, 'Unknown')::VARCHAR AS industry_name,
     UPPER(COALESCE(role_id, 'UNK'))::VARCHAR AS role_id,
     COALESCE(role_name, 'Unknown')::VARCHAR AS role_name,
-    UPPER(COALESCE(skill_id, 'UNK'))::VARCHAR AS skill_id,
-    COALESCE(skill_name, 'Unknown')::VARCHAR AS skill_name,
+    'UNK'::VARCHAR AS skill_id,
+    'Unknown'::VARCHAR AS skill_name,
     TRY_CAST(salary_usd AS DOUBLE) AS salary_usd,
     1 AS posting_count
-FROM stage.raw_postings
+FROM stage.raw_postings_jobs
 WHERE post_date IS NOT NULL;
+
+-- Skill-level grain for inferred skill demand marts (one row per job x skill).
+CREATE OR REPLACE TABLE stage.skill_postings AS
+SELECT
+    date_trunc('month', CAST(j.post_date AS DATE))::DATE AS month,
+    COALESCE(j.geo_id, 'UNK')::VARCHAR AS geo_id,
+    COALESCE(j.geo_name, 'Unknown')::VARCHAR AS geo_name,
+    COALESCE(j.industry_id, 'UNK')::VARCHAR AS industry_id,
+    COALESCE(j.industry_name, 'Unknown')::VARCHAR AS industry_name,
+    UPPER(COALESCE(j.role_id, 'UNK'))::VARCHAR AS role_id,
+    COALESCE(j.role_name, 'Unknown')::VARCHAR AS role_name,
+    UPPER(COALESCE(h.skill_id, 'UNK'))::VARCHAR AS skill_id,
+    COALESCE(h.skill_name, 'Unknown')::VARCHAR AS skill_name,
+    TRY_CAST(j.salary_usd AS DOUBLE) AS salary_usd,
+    1 AS posting_count
+FROM stage.raw_postings_jobs j
+INNER JOIN stage.posting_skill_hits h
+  ON j.job_id = h.job_id
+WHERE j.post_date IS NOT NULL;
 
 CREATE OR REPLACE TABLE stage.cs_postings AS
 WITH allowlist_sizes AS (
@@ -41,6 +61,20 @@ WITH allowlist_sizes AS (
 )
 SELECT p.*
 FROM stage.base_postings p
+LEFT JOIN stage.dim_role r USING (role_id)
+CROSS JOIN allowlist_sizes a
+WHERE
+    a.role_allowlist_size = 0
+    OR r.role_id IS NOT NULL;
+
+CREATE OR REPLACE TABLE stage.skill_cs_postings AS
+WITH allowlist_sizes AS (
+    SELECT
+        (SELECT COUNT(*) FROM stage.dim_role) AS role_allowlist_size,
+        (SELECT COUNT(*) FROM stage.dim_skill) AS skill_allowlist_size
+)
+SELECT p.*
+FROM stage.skill_postings p
 LEFT JOIN stage.dim_role r USING (role_id)
 LEFT JOIN stage.dim_skill s USING (skill_id)
 CROSS JOIN allowlist_sizes a
