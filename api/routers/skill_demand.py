@@ -2,7 +2,8 @@
 
 from datetime import date
 from typing import Optional
-from fastapi import APIRouter, Query
+import psycopg
+from fastapi import APIRouter, Depends, Query
 from api.schemas import SkillDemandResponse, SkillDemandRecord
 from api.dependencies import get_postgres_connection
 
@@ -18,10 +19,10 @@ async def get_skill_demand(
     sort_by: Optional[str] = Query("share_within_role", regex="^(share_within_role|yoy_growth|skill_posting_count)$"),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
+    conn: psycopg.Connection = Depends(get_postgres_connection),
 ):
     """Get skill demand data with optional filters."""
-    conn = get_postgres_connection()
-    
+
     query = "SELECT * FROM analytics.cs_skill_demand WHERE 1=1"
     params = []
     
@@ -73,10 +74,10 @@ async def get_skills_for_role(
     sort_by: Optional[str] = Query("share_within_role", regex="^(share_within_role|yoy_growth|skill_posting_count)$"),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
+    conn: psycopg.Connection = Depends(get_postgres_connection),
 ):
     """Get top skills for a specific role."""
-    conn = get_postgres_connection()
-    
+
     query = "SELECT * FROM analytics.cs_skill_demand WHERE role_id = %s"
     params = [role_id]
     
@@ -121,10 +122,10 @@ async def get_trending_skills(
     role_id: Optional[str] = Query(None),
     min_yoy_growth: float = Query(0, description="Minimum YoY growth percentage"),
     limit: int = Query(50, ge=1, le=1000),
+    conn: psycopg.Connection = Depends(get_postgres_connection),
 ):
     """Get trending skills by YoY growth."""
-    conn = get_postgres_connection()
-    
+
     query = "SELECT * FROM analytics.cs_skill_demand WHERE month = %s AND yoy_growth IS NOT NULL AND yoy_growth > %s"
     params = [month, min_yoy_growth]
     

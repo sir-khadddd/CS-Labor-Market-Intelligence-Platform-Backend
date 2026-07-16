@@ -30,7 +30,7 @@ def get_postgres_connection() -> Generator[psycopg.Connection, None, None]:
     if _postgres_pool is None:
         connstr = os.getenv(
             "DATABASE_URL",
-            "postgresql://localhost/analytics"
+            "postgresql://postgres:postgres@localhost:5432/cs_lmi"
         )
         _postgres_pool = psycopg_pool.ConnectionPool(
             connstr,

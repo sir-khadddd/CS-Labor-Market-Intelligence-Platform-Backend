@@ -42,8 +42,11 @@ CREATE TABLE IF NOT EXISTS analytics.role_skill_associations (
 CREATE TABLE IF NOT EXISTS analytics.salary_distribution (
     month DATE NOT NULL,
     geo_id TEXT NOT NULL,
+    geo_name TEXT NOT NULL,
     industry_id TEXT NOT NULL,
+    industry_name TEXT NOT NULL,
     role_id TEXT NOT NULL,
+    role_name TEXT NOT NULL,
     salary_p25 DOUBLE PRECISION,
     salary_p50 DOUBLE PRECISION,
     salary_p75 DOUBLE PRECISION,
