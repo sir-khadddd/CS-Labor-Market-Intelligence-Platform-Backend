@@ -139,6 +139,17 @@ class TrajectoryLabelResponse(BaseModel):
     offset: int
 
 
+class TrajectoryPredictionResponse(BaseModel):
+    """ML trajectory classifier prediction response (experimental baseline)."""
+    entity_type: str
+    entity_id: str
+    month: date
+    trajectory_class: str
+    confidence: Optional[float] = None
+    method: str
+    method_version: str
+
+
 class TimeSeriesRecord(BaseModel):
     """Time series data point."""
     month: date

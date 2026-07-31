@@ -14,7 +14,7 @@ if str(ROOT) not in sys.path:
 
 from ml.constants import DEFAULT_ARTIFACTS_DIR
 from ml.data import load_trajectory_dataset
-from ml.model import save_model, train_trajectory_classifier
+from ml.model import persist_eval_split, save_model, train_trajectory_classifier
 
 logging.basicConfig(
     level=logging.INFO,
@@ -64,9 +64,18 @@ def main() -> None:
 
     logger.info("Saved model to %s", model_path)
     logger.info("Validation metrics:\n%s", json.dumps(metrics, indent=2))
+
+    split_id = persist_eval_split(metrics, entity_type=args.entity_type)
+    if split_id:
+        logger.info("Recorded eval split split_id=%s", split_id)
+
     print(f"Model saved: {model_path}")
     print(f"Validation accuracy: {metrics['accuracy']:.3f}")
     print(f"Validation macro F1: {metrics['macro_f1']:.3f}")
+    if split_id:
+        print(f"Eval split recorded: {split_id}")
+    else:
+        print("Eval split not recorded (Postgres unavailable)")
 
 
 if __name__ == "__main__":

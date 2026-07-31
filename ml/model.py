@@ -2,24 +2,32 @@
 
 from __future__ import annotations
 
+import logging
+import uuid
 from pathlib import Path
 from typing import Any
 
 import joblib
 import pandas as pd
+import psycopg
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
 
+from config.postgres import get_postgres_dsn
 from ml.constants import (
     DEFAULT_ARTIFACTS_DIR,
     DEFAULT_MODEL_FILENAME,
     FEATURE_COLUMNS,
+    FEATURE_VERSION,
+    LABEL_VERSION,
     METHOD,
     METHOD_VERSION,
 )
 from ml.data import prepare_xy, temporal_split
 from ml.evaluate import classification_report_dict
+
+logger = logging.getLogger(__name__)
 
 
 def build_pipeline() -> Pipeline:
@@ -72,6 +80,8 @@ def train_trajectory_classifier(
             "validation_month_max": str(validation_df["month"].max().date()),
         }
     )
+    if "cs_allowlist_version" in dataset.columns and not dataset["cs_allowlist_version"].empty:
+        metrics["cs_allowlist_version"] = str(dataset["cs_allowlist_version"].iloc[0])
     return pipeline, metrics
 
 
@@ -97,3 +107,70 @@ def save_model(
 def load_model(model_path: Path) -> Pipeline:
     """Load a persisted trajectory classifier."""
     return joblib.load(model_path)
+
+
+def persist_eval_split(
+    metrics: dict[str, Any],
+    *,
+    entity_type: str,
+    dsn: str | None = None,
+) -> str | None:
+    """Record the train/validation split used for this training run in Postgres.
+
+    Inserts a backing `metadata.pipeline_runs` row (if needed) and a
+    `metadata.model_eval_splits` row describing the temporal split. This is
+    best-effort: if Postgres is unavailable, a warning is logged and `None`
+    is returned so dev CSV training never hard-fails.
+    """
+    run_id = f"run_{uuid.uuid4().hex[:12]}"
+    split_id = f"split_{uuid.uuid4().hex[:12]}"
+
+    try:
+        with psycopg.connect(dsn or get_postgres_dsn(), connect_timeout=5) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO metadata.pipeline_runs(
+                        run_id, run_timestamp, feature_version, label_version,
+                        method_version, cs_allowlist_version, notes
+                    ) VALUES (%s, NOW(), %s, %s, %s, %s, %s)
+                    ON CONFLICT (run_id) DO NOTHING;
+                    """,
+                    (
+                        run_id,
+                        FEATURE_VERSION,
+                        LABEL_VERSION,
+                        METHOD_VERSION,
+                        metrics.get("cs_allowlist_version", "unknown"),
+                        f"trajectory classifier training run (entity_type={entity_type})",
+                    ),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO metadata.model_eval_splits(
+                        split_id, run_id, entity_type, train_start_month, train_end_month,
+                        validation_start_month, validation_end_month
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (split_id) DO NOTHING;
+                    """,
+                    (
+                        split_id,
+                        run_id,
+                        entity_type,
+                        metrics["train_month_min"],
+                        metrics["train_month_max"],
+                        metrics["validation_month_min"],
+                        metrics["validation_month_max"],
+                    ),
+                )
+            conn.commit()
+    except psycopg.Error as exc:
+        logger.warning(
+            "Skipping eval split persistence: Postgres unavailable (%s: %s)",
+            exc.__class__.__name__,
+            exc,
+        )
+        return None
+
+    logger.info("Persisted eval split split_id=%s run_id=%s", split_id, run_id)
+    return split_id

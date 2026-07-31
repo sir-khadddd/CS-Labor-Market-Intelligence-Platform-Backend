@@ -1,17 +1,19 @@
+-- v2 relaxes phase1 rule thresholds to increase trajectory_class label diversity
 CREATE OR REPLACE TABLE marts.trajectory_labels AS
 SELECT
     tf.entity_type,
     tf.entity_id,
     tf.month,
     CASE
-        WHEN tf.acceleration >= 5
-            AND tf.posting_count < 200
-            AND tf.yoy_growth >= 10 THEN 'emerging'
-        WHEN tf.yoy_growth >= 5
-            AND COALESCE(tf.volatility_12m, 0) < 15 THEN 'stable_growth'
-        WHEN tf.yoy_growth BETWEEN -2 AND 5
-            AND tf.acceleration < 0 THEN 'plateau'
-        WHEN tf.yoy_growth < -2 THEN 'declining'
+        WHEN (tf.acceleration >= 3
+                AND tf.posting_count < 500
+                AND tf.yoy_growth >= 8)
+            OR (tf.yoy_growth >= 12 AND tf.acceleration >= 0) THEN 'emerging'
+        WHEN tf.yoy_growth >= 3
+            AND COALESCE(tf.volatility_12m, 0) < 25 THEN 'stable_growth'
+        WHEN tf.yoy_growth BETWEEN -3 AND 3
+            AND tf.acceleration <= 0 THEN 'plateau'
+        WHEN tf.yoy_growth < -3 THEN 'declining'
         ELSE 'uncertain'
     END AS trajectory_class,
     tf.momentum_score AS trajectory_score,

@@ -71,4 +71,9 @@ SELECT
     '2025-01-01'::DATE AS validation_start_month
 FROM windowed w
 CROSS JOIN stage.run_context rc
+-- Feature emission gate: 12 observed months, since yoy_growth needs a 12-month lag.
+-- This is distinct from `minimum_months_for_trajectory: 36` in config/cs_universe.yml,
+-- which targets overall extract/panel length for credible ML, not per-row emission.
+-- Mirrors config/cs_universe.yml `min_observed_months_for_features: 12` -- keep both in
+-- sync manually; this literal is not currently read from that YAML.
 WHERE w.observed_months >= 12;

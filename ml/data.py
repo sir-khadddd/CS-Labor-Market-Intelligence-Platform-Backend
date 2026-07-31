@@ -42,7 +42,7 @@ def _load_postgres_tables(conn: psycopg.Connection) -> tuple[pd.DataFrame, pd.Da
     return features, labels
 
 
-def _dedupe_entity_month(
+def dedupe_entity_month(
     frame: pd.DataFrame,
     *,
     sort_by: str = "posting_count",
@@ -79,8 +79,8 @@ def join_trajectory_dataset(
         "label_version",
         "method_version",
     ]
-    features = _dedupe_entity_month(features)
-    labels = _dedupe_entity_month(labels, sort_by="confidence")
+    features = dedupe_entity_month(features)
+    labels = dedupe_entity_month(labels, sort_by="confidence")
 
     merged = features.merge(
         labels[label_cols],

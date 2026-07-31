@@ -52,11 +52,21 @@ def main() -> None:
             ),
             (
                 "trajectory_features",
-                "SELECT * FROM tmp_trajectory_features ORDER BY month DESC LIMIT 25000",
+                "SELECT * FROM tmp_trajectory_features "
+                "QUALIFY ROW_NUMBER() OVER ("
+                "PARTITION BY entity_type, entity_id, month "
+                "ORDER BY run_timestamp DESC"
+                ") = 1 "
+                "ORDER BY month DESC LIMIT 25000",
             ),
             (
                 "trajectory_labels",
-                "SELECT * FROM tmp_trajectory_labels ORDER BY month DESC LIMIT 25000",
+                "SELECT * FROM tmp_trajectory_labels "
+                "QUALIFY ROW_NUMBER() OVER ("
+                "PARTITION BY entity_type, entity_id, month "
+                "ORDER BY run_timestamp DESC"
+                ") = 1 "
+                "ORDER BY month DESC LIMIT 25000",
             ),
         ]
 

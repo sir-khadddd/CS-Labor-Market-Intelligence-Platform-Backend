@@ -76,6 +76,8 @@ python scripts/make_dev_snapshot.py
 
 ```bash
 python scripts/load_postgres.py
+# Or reload a subset without blocking on large tables:
+python scripts/load_postgres.py --tables trajectory_features,trajectory_labels
 ```
 
 ## Phase 1 Lock-Ins Included
@@ -91,6 +93,20 @@ python scripts/load_postgres.py
 
 `data/dev_processed` is safe for GitHub sharing because it contains only aggregated outputs.
 Do not commit raw posting-level exports or individual-level data.
+
+## Trajectory ML Data Requirements
+
+Two related but distinct settings govern trajectory data, both in `config/cs_universe.yml`:
+
+- `minimum_months_for_trajectory: 36` -- target extract/panel length for credible ML
+  training and evaluation. `config/wrds_extract.yml` `extract.start_date` should span at
+  least this many months up to `end_date`.
+- `min_observed_months_for_features: 12` -- minimum trailing observed months required
+  per entity before a `trajectory_features` row is emitted, since YoY growth needs a
+  12-month lag. Enforced in `sql/duckdb/50_trajectory_features.sql` via
+  `WHERE observed_months >= 12`. This value is hardcoded in SQL (not read from the YAML)
+  because `scripts/build_duckdb.py` does not template config values into SQL text today.
+  If you change the YAML value, update the SQL literal to match.
 
 ## Industry Dimension Note
 

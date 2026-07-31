@@ -1,4 +1,4 @@
-"""Shared constants for trajectory ML."""
+﻿"""Shared constants for trajectory ML."""
 
 from pathlib import Path
 
@@ -26,7 +26,7 @@ TRAJECTORY_CLASSES = [
 
 METHOD = "ml_classifier"
 METHOD_VERSION = "ml-v1"
-LABEL_VERSION = "phase1-v1"
+LABEL_VERSION = "phase1-v2"
 FEATURE_VERSION = "phase1-v1"
 
 DEFAULT_MODEL_FILENAME = "trajectory_role_classifier.joblib"

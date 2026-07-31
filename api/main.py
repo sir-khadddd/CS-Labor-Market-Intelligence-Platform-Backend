@@ -68,7 +68,12 @@ def create_app() -> FastAPI:
                 "salary": "/api/v1/salaries",
                 "role_skills": "/api/v1/role-skills",
                 "trajectory": "/api/v1/trajectory",
-            }
+                "trajectory_predict": "/api/v1/trajectory/predict",
+            },
+            # ML honesty: the ml_classifier method is an experimental baseline.
+            # Do not treat it as primary until it clears the metrics gate.
+            "labels_methods": ["phase1_rules", "ml_classifier"],
+            "trajectory_status": "ml_baseline_experimental",
         }
 
     # Startup event

@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import argparse
+import csv
+import io
 import logging
+import re
 import sys
 import time
 import uuid
@@ -28,11 +32,21 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 SQL_SCHEMA = ROOT / "sql" / "postgres" / "schema.sql"
-SQL_INDEXES = ROOT / "sql" / "postgres" / "indexes.sql"
 SQL_METADATA = ROOT / "sql" / "postgres" / "metadata_contracts.sql"
 PROCESSED_DIR = ROOT / "data" / "processed"
 
 COPY_PROGRESS_EVERY_ROWS = 500_000
+
+# DuckDB CSV export writes integer counts as floats ("6963.0"); Postgres BIGINT rejects those.
+INTEGER_COUNT_COLUMNS: dict[str, list[str]] = {
+    "cs_job_demand": ["posting_count"],
+    "cs_skill_demand": ["skill_posting_count", "role_posting_count"],
+    "role_skill_associations": ["co_occurrence_count"],
+    "salary_distribution": [],
+    "trajectory_features": ["posting_count"],
+    "trajectory_labels": [],
+}
+INTEGER_AS_FLOAT_PATTERN = re.compile(r"^([+-]?\d+)\.0+$")
 
 TABLE_PRIMARY_KEYS: dict[str, list[str]] = {
     "cs_job_demand": ["month", "geo_id", "industry_id", "role_id"],
@@ -41,6 +55,31 @@ TABLE_PRIMARY_KEYS: dict[str, list[str]] = {
     "salary_distribution": ["month", "geo_id", "industry_id", "role_id"],
     "trajectory_features": ["entity_type", "entity_id", "month", "feature_version"],
     "trajectory_labels": ["entity_type", "entity_id", "month", "label_version", "method_version"],
+}
+
+TABLE_INDEXES: dict[str, list[str]] = {
+    "cs_job_demand": [
+        "CREATE INDEX IF NOT EXISTS idx_job_demand_role_month "
+        "ON analytics.cs_job_demand (role_id, month DESC);",
+        "CREATE INDEX IF NOT EXISTS idx_job_demand_industry_month "
+        "ON analytics.cs_job_demand (industry_id, month DESC);",
+    ],
+    "cs_skill_demand": [
+        "CREATE INDEX IF NOT EXISTS idx_skill_demand_skill_month "
+        "ON analytics.cs_skill_demand (skill_id, month DESC);",
+    ],
+    "role_skill_associations": [
+        "CREATE INDEX IF NOT EXISTS idx_role_skill_lift_month "
+        "ON analytics.role_skill_associations (month DESC, lift DESC);",
+    ],
+    "salary_distribution": [
+        "CREATE INDEX IF NOT EXISTS idx_salary_role_geo_month "
+        "ON analytics.salary_distribution (role_id, geo_id, month DESC);",
+    ],
+    "trajectory_labels": [
+        "CREATE INDEX IF NOT EXISTS idx_traj_labels_entity_month "
+        "ON analytics.trajectory_labels (entity_type, entity_id, month DESC);",
+    ],
 }
 
 DEBUG_LOG_PATH = ROOT / "debug-cb38af.log"
@@ -103,6 +142,50 @@ def _exec_file(cur: psycopg.Cursor, path: Path, label: str) -> None:
     logger.info("Finished %s in %.1fs", label, time.perf_counter() - started)
 
 
+def _clean_integer_cell(value: str) -> str:
+    stripped = value.strip()
+    if not stripped or stripped.lower() in {"nan", "none", "null"}:
+        return ""
+    match = INTEGER_AS_FLOAT_PATTERN.fullmatch(stripped)
+    if match:
+        return match.group(1)
+    return stripped
+
+
+def _iter_cleaned_csv_lines(csv_path: Path, table_name: str):
+    """Yield CSV text lines, normalizing integer-count float strings for Postgres."""
+    columns_to_clean = INTEGER_COUNT_COLUMNS.get(table_name, [])
+    with csv_path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.reader(handle)
+        try:
+            header = next(reader)
+        except StopIteration:
+            return
+
+        out = io.StringIO()
+        writer = csv.writer(out, lineterminator="\n")
+        writer.writerow(header)
+        yield out.getvalue()
+
+        if not columns_to_clean:
+            for row in reader:
+                out.seek(0)
+                out.truncate(0)
+                writer.writerow(row)
+                yield out.getvalue()
+            return
+
+        indexes = [header.index(col) for col in columns_to_clean if col in header]
+        for row in reader:
+            for idx in indexes:
+                if idx < len(row):
+                    row[idx] = _clean_integer_cell(row[idx])
+            out.seek(0)
+            out.truncate(0)
+            writer.writerow(row)
+            yield out.getvalue()
+
+
 def _copy_csv(cur: psycopg.Cursor, table_name: str, csv_path: Path) -> int:
     size_mb = csv_path.stat().st_size / (1024 * 1024)
     logger.info("Loading %s from %s (%.1f MB)", table_name, csv_path.name, size_mb)
@@ -111,21 +194,20 @@ def _copy_csv(cur: psycopg.Cursor, table_name: str, csv_path: Path) -> int:
     cur.execute(f"TRUNCATE TABLE analytics.{table_name};")
 
     row_count = 0
-    with csv_path.open("r", encoding="utf-8") as handle:
-        with cur.copy(
-            f"COPY analytics.{table_name} FROM STDIN WITH (FORMAT CSV, HEADER TRUE)"
-        ) as copy:
-            for line in handle:
-                copy.write(line)
-                row_count += 1
-                if row_count % COPY_PROGRESS_EVERY_ROWS == 0:
-                    elapsed = time.perf_counter() - started
-                    logger.info(
-                        "  %s: %s rows copied (%.1fs elapsed)",
-                        table_name,
-                        f"{row_count:,}",
-                        elapsed,
-                    )
+    with cur.copy(
+        f"COPY analytics.{table_name} FROM STDIN WITH (FORMAT CSV, HEADER TRUE)"
+    ) as copy:
+        for line in _iter_cleaned_csv_lines(csv_path, table_name):
+            copy.write(line)
+            row_count += 1
+            if row_count % COPY_PROGRESS_EVERY_ROWS == 0:
+                elapsed = time.perf_counter() - started
+                logger.info(
+                    "  %s: %s rows copied (%.1fs elapsed)",
+                    table_name,
+                    f"{row_count:,}",
+                    elapsed,
+                )
 
     cur.execute(f"SELECT COUNT(*) FROM analytics.{table_name}")
     loaded_rows = int(cur.fetchone()[0])
@@ -138,7 +220,80 @@ def _copy_csv(cur: psycopg.Cursor, table_name: str, csv_path: Path) -> int:
     return loaded_rows
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Load processed analytics CSVs into Postgres."
+    )
+    parser.add_argument(
+        "--tables",
+        default=None,
+        help=(
+            "Comma-separated analytics tables to load "
+            f"(default: all {len(ANALYTICS_TABLES)} configured tables)"
+        ),
+    )
+    return parser.parse_args()
+
+
+def _resolve_tables(tables_arg: str | None) -> list[str]:
+    if not tables_arg:
+        return list(ANALYTICS_TABLES)
+
+    selected = [name.strip() for name in tables_arg.split(",") if name.strip()]
+    if not selected:
+        raise ValueError("--tables was provided but no table names were given")
+
+    unknown = sorted(set(selected) - set(ANALYTICS_TABLES))
+    if unknown:
+        raise ValueError(
+            f"Unknown table(s): {', '.join(unknown)}. "
+            f"Valid choices: {', '.join(ANALYTICS_TABLES)}"
+        )
+    return selected
+
+
+def _setup_database(conn: psycopg.Connection, *, full_rebuild: bool) -> None:
+    with conn.cursor() as cur:
+        if full_rebuild:
+            for table in ANALYTICS_TABLES:
+                logger.info("Dropping analytics.%s if present", table)
+                cur.execute(f"DROP TABLE IF EXISTS analytics.{table} CASCADE;")
+
+        _exec_file(cur, SQL_SCHEMA, "schema")
+        _exec_file(cur, SQL_METADATA, "metadata contracts")
+
+    logger.info("Committing schema setup...")
+    conn.commit()
+
+
+def _apply_table_indexes(cur: psycopg.Cursor, table_name: str) -> None:
+    for stmt in TABLE_INDEXES.get(table_name, []):
+        cur.execute(stmt)
+
+
+def _load_one_table(conn: psycopg.Connection, table_name: str, csv_path: Path) -> int:
+    pk_stats = _check_csv_primary_keys(table_name, csv_path)
+    logger.info(
+        "Validated %s primary keys: %s rows, %s distinct keys",
+        table_name,
+        f"{pk_stats['total_rows']:,}",
+        f"{pk_stats['distinct_keys']:,}",
+    )
+
+    with conn.cursor() as cur:
+        row_count = _copy_csv(cur, table_name, csv_path)
+        _apply_table_indexes(cur, table_name)
+
+    logger.info("Committing %s...", table_name)
+    conn.commit()
+    return row_count
+
+
 def main() -> None:
+    args = parse_args()
+    tables = _resolve_tables(args.tables)
+    full_rebuild = args.tables is None
+
     dsn = get_postgres_dsn()
     safe_dsn = redact_postgres_dsn(dsn)
     run_id = f"run_{uuid.uuid4().hex[:12]}"
@@ -146,6 +301,10 @@ def main() -> None:
 
     logger.info("Starting Postgres load (run_id=%s, dsn=%s)", run_id, safe_dsn)
     logger.info("Processed CSV directory: %s", PROCESSED_DIR)
+    if full_rebuild:
+        logger.info("Loading all configured analytics tables")
+    else:
+        logger.info("Loading selected analytics tables: %s", ", ".join(tables))
 
     logger.info("Checking Postgres connectivity...")
     health = check_postgres_health()
@@ -163,25 +322,15 @@ def main() -> None:
     row_counts: dict[str, int] = {}
 
     with psycopg.connect(dsn, connect_timeout=30) as conn:
+        _setup_database(conn, full_rebuild=full_rebuild)
+
+        for table in tables:
+            csv_path = PROCESSED_DIR / f"{table}.csv"
+            if not csv_path.exists():
+                raise FileNotFoundError(f"Missing processed CSV: {csv_path}")
+            row_counts[table] = _load_one_table(conn, table, csv_path)
+
         with conn.cursor() as cur:
-            _exec_file(cur, SQL_SCHEMA, "schema")
-            _exec_file(cur, SQL_METADATA, "metadata contracts")
-
-            for table in ANALYTICS_TABLES:
-                csv_path = PROCESSED_DIR / f"{table}.csv"
-                if not csv_path.exists():
-                    raise FileNotFoundError(f"Missing processed CSV: {csv_path}")
-                pk_stats = _check_csv_primary_keys(table, csv_path)
-                logger.info(
-                    "Validated %s primary keys: %s rows, %s distinct keys",
-                    table,
-                    f"{pk_stats['total_rows']:,}",
-                    f"{pk_stats['distinct_keys']:,}",
-                )
-                row_counts[table] = _copy_csv(cur, table, csv_path)
-
-            _exec_file(cur, SQL_INDEXES, "indexes")
-
             logger.info("Recording pipeline run metadata (run_id=%s)", run_id)
             cur.execute(
                 """
@@ -195,8 +344,7 @@ def main() -> None:
                 """,
                 (run_id, "phase1-v1", "phase1-v1", "rules-v1", "2026.04", "local load"),
             )
-
-        logger.info("Committing transaction...")
+        logger.info("Committing pipeline run metadata...")
         conn.commit()
 
     total_rows = sum(row_counts.values())

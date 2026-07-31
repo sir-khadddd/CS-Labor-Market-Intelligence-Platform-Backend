@@ -1,9 +1,21 @@
-"""Trajectory feature and label endpoints."""
+"""Trajectory feature and label endpoints.
 
+NOTE ON ML HONESTY: the ML classifier (method="ml_classifier",
+method_version=ml-v1, see ml/constants.py) is an experimental baseline
+trained on limited history. Do not treat it as the primary trajectory
+signal in downstream products or dashboards until it clears an explicit
+accuracy/F1 metrics gate and is promoted via a method_version bump. Prefer
+method="phase1_rules" for anything user-facing until then.
+"""
+
+import logging
+import os
 from datetime import date
+from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+import pandas as pd
+from fastapi import APIRouter, Depends, HTTPException, Query
 from psycopg import Connection
 
 from api.dependencies import get_postgres_connection
@@ -12,9 +24,45 @@ from api.schemas import (
     TrajectoryFeatureResponse,
     TrajectoryLabelRecord,
     TrajectoryLabelResponse,
+    TrajectoryPredictionResponse,
 )
+from ml.constants import (
+    DEFAULT_ARTIFACTS_DIR,
+    DEFAULT_MODEL_FILENAME,
+    FEATURE_COLUMNS,
+    FEATURE_VERSION,
+    METHOD,
+    METHOD_VERSION,
+)
+from ml.model import load_model
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/trajectory", tags=["trajectory"])
+
+_model_cache: dict[str, object] = {}
+
+
+def _get_model_path() -> Path:
+    """Resolve the ML model artifact path, honoring ML_MODEL_PATH override."""
+    override = os.getenv("ML_MODEL_PATH")
+    if override:
+        return Path(override)
+    return DEFAULT_ARTIFACTS_DIR / DEFAULT_MODEL_FILENAME
+
+
+def _load_cached_model():
+    """Load and cache the trajectory classifier, or None if missing."""
+    model_path = _get_model_path()
+    cache_key = str(model_path)
+    if cache_key in _model_cache:
+        return _model_cache[cache_key]
+    if not model_path.exists():
+        return None
+    model = load_model(model_path)
+    _model_cache.clear()
+    _model_cache[cache_key] = model
+    return model
 
 
 @router.get("/features", response_model=TrajectoryFeatureResponse)
@@ -110,4 +158,61 @@ async def get_trajectory_labels(
         total=total,
         limit=limit,
         offset=offset,
+    )
+
+
+@router.get("/predict", response_model=TrajectoryPredictionResponse)
+async def predict_trajectory(
+    entity_type: str = Query("role", description="Entity type (e.g. role)"),
+    entity_id: str = Query(..., description="Entity identifier"),
+    month: date = Query(..., description="Month (YYYY-MM-01)"),
+    conn: Connection = Depends(get_postgres_connection),
+):
+    """Predict trajectory_class for an entity-month using the ML classifier.
+
+    Experimental baseline (see module docstring): not the primary
+    trajectory signal until the accuracy/F1 metrics gate is met.
+    """
+    model = _load_cached_model()
+    if model is None:
+        raise HTTPException(
+            status_code=503,
+            detail=f"ML model artifact not found at {_get_model_path()}",
+        )
+
+    query = """
+        SELECT * FROM analytics.trajectory_features
+        WHERE entity_type = %s AND entity_id = %s AND month = %s AND feature_version = %s
+        ORDER BY posting_count DESC
+        LIMIT 1
+    """
+    with conn.cursor() as cur:
+        cur.execute(query, (entity_type, entity_id, month, FEATURE_VERSION))
+        row = cur.fetchone()
+        if row is None:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"No trajectory features for entity_type={entity_type} "
+                    f"entity_id={entity_id} month={month}"
+                ),
+            )
+        columns = [desc[0] for desc in cur.description]
+
+    feature_row = dict(zip(columns, row))
+    x = pd.DataFrame([{col: feature_row.get(col) for col in FEATURE_COLUMNS}])
+
+    trajectory_class = str(model.predict(x)[0])
+    confidence: Optional[float] = None
+    if hasattr(model, "predict_proba"):
+        confidence = float(model.predict_proba(x)[0].max())
+
+    return TrajectoryPredictionResponse(
+        entity_type=entity_type,
+        entity_id=entity_id,
+        month=month,
+        trajectory_class=trajectory_class,
+        confidence=confidence,
+        method=METHOD,
+        method_version=METHOD_VERSION,
     )
