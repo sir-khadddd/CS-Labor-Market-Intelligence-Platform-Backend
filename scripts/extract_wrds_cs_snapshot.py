@@ -137,12 +137,10 @@ def _partition_dir(out_dir: Path, year: int, month: int) -> Path:
 
 
 def _complete_parquet_paths(postings_out: Path) -> list[Path]:
+    """Parquet files from partitions considered complete (see _partition_exists)."""
     if not postings_out.exists():
         return []
-    paths: list[Path] = []
-    for success in postings_out.rglob(_PARTITION_SUCCESS):
-        paths.extend(p for p in success.parent.glob("*.parquet") if p.is_file())
-    return paths
+    return sorted(p for p in postings_out.rglob("*.parquet") if p.is_file())
 
 
 def _rcids_and_role_counts_from_postings_parquet(postings_out: Path) -> tuple[set[int], dict[str, int], int]:
@@ -290,7 +288,18 @@ def _write_role_frequency_report(
 
 
 def _partition_exists(out_dir: Path, year: int, month: int) -> bool:
-    return (_partition_dir(out_dir, year, month) / _PARTITION_SUCCESS).is_file()
+    """Whether a month partition counts as complete for resume.
+
+    New partitions are sentineled with _SUCCESS. Partitions written before the
+    sentinel existed only contain parquet files, and refetching them means
+    re-running expensive WRDS queries over data that is already on disk, so a
+    partition holding parquet is treated as legacy-complete. To force a refetch
+    of such a month, delete its year=/month= directory.
+    """
+    part_dir = _partition_dir(out_dir, year, month)
+    if (part_dir / _PARTITION_SUCCESS).is_file():
+        return True
+    return any(p.is_file() for p in part_dir.glob("*.parquet")) if part_dir.is_dir() else False
 
 
 def _mark_partition_complete(part_dir: Path) -> None:
@@ -298,9 +307,15 @@ def _mark_partition_complete(part_dir: Path) -> None:
     (part_dir / _PARTITION_SUCCESS).write_text("", encoding="utf-8")
 
 
-def _clear_incomplete_partition(out_dir: Path, year: int, month: int) -> None:
+def _reset_partition(out_dir: Path, year: int, month: int) -> None:
+    """Drop a partition directory just before rewriting that month.
+
+    Only called once the month has been fetched again, so nothing complete is
+    discarded on resume; it keeps a previous partial write from leaving stray
+    parquet files alongside the new ones.
+    """
     part_dir = _partition_dir(out_dir, year, month)
-    if part_dir.is_dir() and not _partition_exists(out_dir, year, month):
+    if part_dir.is_dir():
         shutil.rmtree(part_dir)
 
 
@@ -382,7 +397,7 @@ def _fetch_postings_by_month(
             )
 
         if flush:
-            _clear_incomplete_partition(out_dir, year, month)
+            _reset_partition(out_dir, year, month)
             chunk = chunk.copy()
             chunk["year"] = year
             chunk["month"] = month

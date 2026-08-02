@@ -73,6 +73,12 @@ INDEX_STMT_PATTERN = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
+TABLE_DEF_PATTERN = re.compile(
+    r"CREATE TABLE IF NOT EXISTS analytics\.(\w+)\s*\((.*?)\n\);",
+    re.IGNORECASE | re.DOTALL,
+)
+TEXT_COLUMN_PATTERN = re.compile(r"^\s*(\w+)\s+TEXT\b", re.IGNORECASE)
+
 
 def _load_table_indexes() -> dict[str, list[str]]:
     """Parse sql/postgres/indexes.sql (source of truth for analytics indexes)."""
@@ -85,7 +91,29 @@ def _load_table_indexes() -> dict[str, list[str]]:
     return indexes
 
 
+def _load_table_text_columns() -> dict[str, list[str]]:
+    """Parse TEXT columns per analytics table from sql/postgres/schema.sql.
+
+    COPY ... FORMAT CSV maps an unquoted empty field to NULL, and the cleaning
+    pass below cannot tell an empty string apart from a NULL once the CSV is
+    parsed. Listing these columns in FORCE_NOT_NULL keeps empty text as '',
+    while numeric columns keep the empty-means-NULL behaviour they need.
+    """
+    text = SQL_SCHEMA.read_text(encoding="utf-8")
+    columns: dict[str, list[str]] = {}
+    for table_name, body in TABLE_DEF_PATTERN.findall(text):
+        names = [
+            match.group(1)
+            for match in (TEXT_COLUMN_PATTERN.match(line) for line in body.splitlines())
+            if match
+        ]
+        if names:
+            columns[table_name] = names
+    return columns
+
+
 TABLE_INDEXES = _load_table_indexes()
+TABLE_TEXT_COLUMNS = _load_table_text_columns()
 
 
 def _configure_session(cur: psycopg.Cursor) -> None:
@@ -136,8 +164,22 @@ def _clean_integer_cell(value: str) -> str:
     return stripped
 
 
+def _copy_sql(table_name: str) -> str:
+    """Build the COPY statement, forcing empty text cells to stay empty strings."""
+    options = ["FORMAT CSV", "HEADER TRUE"]
+    text_columns = TABLE_TEXT_COLUMNS.get(table_name, [])
+    if text_columns:
+        options.append(f"FORCE_NOT_NULL ({', '.join(text_columns)})")
+    return f"COPY analytics.{table_name} FROM STDIN WITH ({', '.join(options)})"
+
+
 def _iter_cleaned_csv_lines(csv_path: Path, table_name: str):
-    """Yield CSV text lines, normalizing integer-count float strings for Postgres."""
+    """Yield CSV text lines, normalizing integer-count float strings for Postgres.
+
+    Quoting stays minimal so an empty numeric cell is emitted unquoted and COPY
+    reads it as NULL; empty text cells are protected by FORCE_NOT_NULL instead
+    (see _copy_sql).
+    """
     columns_to_clean = INTEGER_COUNT_COLUMNS.get(table_name, [])
     with csv_path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.reader(handle)
@@ -147,7 +189,7 @@ def _iter_cleaned_csv_lines(csv_path: Path, table_name: str):
             return
 
         out = io.StringIO()
-        writer = csv.writer(out, lineterminator="\n", quoting=csv.QUOTE_NONNUMERIC)
+        writer = csv.writer(out, lineterminator="\n")
         writer.writerow(header)
         yield out.getvalue()
 
@@ -184,9 +226,7 @@ def _copy_csv(cur: psycopg.Cursor, table_name: str, csv_path: Path) -> int:
     cur.execute(f"TRUNCATE TABLE analytics.{table_name};")
 
     row_count = 0
-    with cur.copy(
-        f"COPY analytics.{table_name} FROM STDIN WITH (FORMAT CSV, HEADER TRUE)"
-    ) as copy:
+    with cur.copy(_copy_sql(table_name)) as copy:
         for line in _iter_cleaned_csv_lines(csv_path, table_name):
             copy.write(line)
             row_count += 1

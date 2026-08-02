@@ -5,6 +5,7 @@ from datetime import datetime
 import pandas as pd
 import pytest
 
+from ml import data as ml_data
 from ml.constants import FEATURE_VERSION, LABEL_VERSION
 from ml.data import dedupe_entity_month, join_trajectory_dataset, temporal_split
 
@@ -150,7 +151,21 @@ def test_temporal_split_empty_raises():
         temporal_split(empty)
 
 
-def test_temporal_split_by_validation_start_month():
+def _patch_split_config(monkeypatch, *, train_start=None, validation_start=None):
+    monkeypatch.setattr(
+        ml_data,
+        "_load_trajectory_split_config",
+        lambda: {
+            "train_start_month": pd.to_datetime(train_start) if train_start else None,
+            "validation_start_month": (
+                pd.to_datetime(validation_start) if validation_start else None
+            ),
+        },
+    )
+
+
+def test_temporal_split_by_validation_start_month(monkeypatch):
+    _patch_split_config(monkeypatch, validation_start="2024-06-01")
     dataset = pd.DataFrame(
         [
             _feature_row(month=pd.Timestamp("2024-03-01")),
@@ -166,17 +181,77 @@ def test_temporal_split_by_validation_start_month():
     assert len(validation) == 2
 
 
-def test_temporal_split_warns_on_config_mismatch(caplog):
+def test_temporal_split_prefers_config_over_embedded_month(monkeypatch):
+    _patch_split_config(monkeypatch, validation_start="2024-06-01")
+    dataset = pd.DataFrame(
+        [
+            _feature_row(
+                month=pd.Timestamp(month),
+                validation_start_month=pd.Timestamp("2024-03-01"),
+            )
+            for month in ("2024-03-01", "2024-05-01", "2024-06-01")
+        ]
+    )
+    dataset["trajectory_class"] = "stable_growth"
+    train, validation = temporal_split(dataset)
+    assert len(train) == 2
+    assert len(validation) == 1
+    assert validation.iloc[0]["month"] == pd.Timestamp("2024-06-01")
+
+
+def test_temporal_split_applies_config_train_start_lower_bound(monkeypatch):
+    _patch_split_config(monkeypatch, train_start="2024-04-01", validation_start="2024-06-01")
+    dataset = pd.DataFrame(
+        [
+            _feature_row(month=pd.Timestamp(month))
+            for month in ("2024-02-01", "2024-04-01", "2024-05-01", "2024-07-01")
+        ]
+    )
+    dataset["trajectory_class"] = "stable_growth"
+    train, validation = temporal_split(dataset)
+    assert list(train["month"]) == [pd.Timestamp("2024-04-01"), pd.Timestamp("2024-05-01")]
+    assert len(validation) == 1
+
+
+def test_temporal_split_falls_back_to_embedded_months(monkeypatch):
+    _patch_split_config(monkeypatch)
+    dataset = pd.DataFrame(
+        [
+            _feature_row(
+                month=pd.Timestamp(month),
+                train_start_month=pd.Timestamp("2024-04-01"),
+                validation_start_month=pd.Timestamp("2024-06-01"),
+            )
+            for month in ("2024-02-01", "2024-04-01", "2024-07-01")
+        ]
+    )
+    dataset["trajectory_class"] = "stable_growth"
+    train, validation = temporal_split(dataset)
+    assert list(train["month"]) == [pd.Timestamp("2024-04-01")]
+    assert len(validation) == 1
+
+
+def test_temporal_split_without_any_split_month_raises(monkeypatch):
+    _patch_split_config(monkeypatch)
+    dataset = pd.DataFrame([_feature_row(month=pd.Timestamp("2024-02-01"))])
+    dataset = dataset.drop(columns=["validation_start_month"])
+    dataset["trajectory_class"] = "stable_growth"
+    with pytest.raises(ValueError, match="No validation_start_month"):
+        temporal_split(dataset)
+
+
+def test_temporal_split_warns_on_config_mismatch(monkeypatch, caplog):
+    _patch_split_config(monkeypatch, train_start="2024-01-01", validation_start="2024-06-01")
     dataset = pd.DataFrame(
         [
             _feature_row(
                 month=pd.Timestamp("2024-03-01"),
-                validation_start_month=pd.Timestamp("2024-06-01"),
+                validation_start_month=pd.Timestamp("2024-05-01"),
                 train_start_month=pd.Timestamp("2098-01-01"),
             ),
             _feature_row(
                 month=pd.Timestamp("2024-07-01"),
-                validation_start_month=pd.Timestamp("2024-06-01"),
+                validation_start_month=pd.Timestamp("2024-05-01"),
                 train_start_month=pd.Timestamp("2098-01-01"),
             ),
         ]
@@ -188,3 +263,9 @@ def test_temporal_split_warns_on_config_mismatch(caplog):
     assert len(validation) == 1
     assert any("validation_start_month in dataset" in record.message for record in caplog.records)
     assert any("train_start_month in dataset" in record.message for record in caplog.records)
+
+
+def test_load_trajectory_split_config_reads_repo_config():
+    config = ml_data._load_trajectory_split_config()
+    assert config["train_start_month"] == pd.Timestamp("2023-01-01")
+    assert config["validation_start_month"] == pd.Timestamp("2025-01-01")

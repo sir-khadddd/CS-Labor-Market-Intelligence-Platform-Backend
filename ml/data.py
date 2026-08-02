@@ -132,16 +132,28 @@ def load_trajectory_dataset(
     )
 
 
-def _load_trajectory_split_config() -> dict[str, pd.Timestamp]:
-    """Read train/validation split months from cs_universe.yml."""
-    cfg = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+def _load_trajectory_split_config() -> dict[str, pd.Timestamp | None]:
+    """Read train/validation split months from cs_universe.yml.
+
+    Missing keys come back as None so callers can fall back to the months
+    embedded in the dataset instead of a silent hardcoded default.
+    """
+    cfg = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8")) or {}
     traj = cfg.get("trajectory_ml") or {}
     return {
-        "train_start_month": pd.to_datetime(traj.get("train_start_month", "2023-01-01")),
-        "validation_start_month": pd.to_datetime(
-            traj.get("validation_start_month", "2025-01-01")
-        ),
+        column: pd.to_datetime(traj[column]) if traj.get(column) else None
+        for column in ("train_start_month", "validation_start_month")
     }
+
+
+def _embedded_split_month(dataset: pd.DataFrame, column: str) -> pd.Timestamp | None:
+    """First non-null value of a split-month column carried by the dataset."""
+    if column not in dataset.columns:
+        return None
+    values = pd.to_datetime(dataset[column].dropna().unique())
+    if len(values) == 0:
+        return None
+    return values[0]
 
 
 def _warn_split_config_mismatch(dataset: pd.DataFrame) -> None:
@@ -157,9 +169,10 @@ def _warn_split_config_mismatch(dataset: pd.DataFrame) -> None:
             continue
         actual = values[0]
         expected_value = expected[column]
-        if actual != expected_value:
+        if expected_value is not None and actual != expected_value:
             logger.warning(
-                "%s in dataset (%s) differs from config/cs_universe.yml (%s)",
+                "%s in dataset (%s) differs from config/cs_universe.yml (%s); "
+                "config wins",
                 column,
                 actual.date(),
                 expected_value.date(),
@@ -169,16 +182,35 @@ def _warn_split_config_mismatch(dataset: pd.DataFrame) -> None:
 def temporal_split(
     dataset: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Split dataset using validation_start_month embedded in features."""
+    """Split dataset into train/validation on the configured split months.
+
+    config/cs_universe.yml is authoritative: the months embedded in
+    trajectory_features are only a fallback for rows built before a config
+    change, so a stale rebuild cannot quietly move the evaluation boundary.
+    """
     if dataset.empty:
         raise ValueError("Cannot split an empty trajectory dataset")
 
     _warn_split_config_mismatch(dataset)
+    config = _load_trajectory_split_config()
 
-    validation_start = pd.to_datetime(dataset["validation_start_month"].iloc[0])
-    train = dataset[dataset["month"] < validation_start].copy()
-    validation = dataset[dataset["month"] >= validation_start].copy()
-    return train.reset_index(drop=True), validation.reset_index(drop=True)
+    validation_start = config["validation_start_month"]
+    if validation_start is None:
+        validation_start = _embedded_split_month(dataset, "validation_start_month")
+    if validation_start is None:
+        raise ValueError(
+            "No validation_start_month in config/cs_universe.yml or dataset columns"
+        )
+
+    train_start = config["train_start_month"]
+    if train_start is None:
+        train_start = _embedded_split_month(dataset, "train_start_month")
+
+    train = dataset[dataset["month"] < validation_start]
+    if train_start is not None:
+        train = train[train["month"] >= train_start]
+    validation = dataset[dataset["month"] >= validation_start]
+    return train.copy().reset_index(drop=True), validation.copy().reset_index(drop=True)
 
 
 def prepare_xy(

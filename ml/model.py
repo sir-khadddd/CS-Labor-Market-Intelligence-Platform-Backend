@@ -120,16 +120,24 @@ def load_model_metrics(model_path: Path) -> dict[str, Any] | None:
     return json.loads(metrics_path.read_text(encoding="utf-8"))
 
 
-def sklearn_major_version_mismatch(metrics: dict[str, Any]) -> str | None:
-    """Return an error message when artifact/runtime sklearn majors differ."""
+def _major_minor(version: str) -> tuple[str, str]:
+    parts = str(version).split(".")
+    return parts[0], parts[1] if len(parts) > 1 else "0"
+
+
+def sklearn_version_mismatch(metrics: dict[str, Any]) -> str | None:
+    """Return an error message when artifact/runtime sklearn minor lines differ.
+
+    Pickled estimators are only guaranteed to load under the sklearn version
+    that wrote them, and private attributes have changed within a major line
+    (e.g. 1.5 -> 1.6), so major.minor is compared rather than major alone.
+    """
     trained = metrics.get("sklearn_version")
     if not trained:
         return None
-    trained_major = str(trained).split(".", 1)[0]
-    runtime_major = sklearn.__version__.split(".", 1)[0]
-    if trained_major != runtime_major:
+    if _major_minor(trained) != _major_minor(sklearn.__version__):
         return (
-            f"sklearn major version mismatch: artifact={trained}, "
+            f"sklearn version mismatch: artifact={trained}, "
             f"runtime={sklearn.__version__}"
         )
     return None

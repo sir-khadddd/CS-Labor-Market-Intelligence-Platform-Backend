@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import glob
 from pathlib import Path
 import uuid
@@ -21,11 +22,26 @@ def _read_sql(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _iso_date(value: object, key: str) -> str:
+    """Validate a config value as an ISO date before it is spliced into SQL."""
+    text = str(value).strip()
+    try:
+        datetime.date.fromisoformat(text)
+    except ValueError as exc:
+        raise ValueError(
+            f"trajectory_ml.{key} in config/cs_universe.yml must be an ISO date "
+            f"(YYYY-MM-DD), got {value!r}"
+        ) from exc
+    return text
+
+
 def _render_sql(sql_text: str, cfg: dict) -> str:
     """Substitute trajectory ML split placeholders from cs_universe.yml."""
     traj = cfg.get("trajectory_ml") or {}
-    train_start = str(traj.get("train_start_month", "2023-01-01"))
-    validation_start = str(traj.get("validation_start_month", "2025-01-01"))
+    train_start = _iso_date(traj.get("train_start_month", "2023-01-01"), "train_start_month")
+    validation_start = _iso_date(
+        traj.get("validation_start_month", "2025-01-01"), "validation_start_month"
+    )
     return (
         sql_text.replace("{{TRAIN_START_MONTH}}", train_start)
         .replace("{{VALIDATION_START_MONTH}}", validation_start)

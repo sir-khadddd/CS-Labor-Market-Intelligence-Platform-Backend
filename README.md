@@ -132,6 +132,10 @@ pip install -r requirements.txt
 - `CS_LMI_PROCESSED_DIR` default: `data/processed`
 - `CS_LMI_POSTGRES_DSN` default: `postgresql://postgres:postgres@localhost:5432/cs_lmi` (also used by the API via `config/postgres.py`)
 - `DATABASE_URL` optional alias for API if set (otherwise `CS_LMI_POSTGRES_DSN` applies)
+- `ML_MODEL_PATH` optional trajectory model artifact override. The resolved path must stay
+  inside `ml/artifacts`; the API loads models with `joblib`, so pointing it elsewhere would
+  let any writable file be unpickled. Values outside that directory are ignored with a
+  warning and `/api/v1/trajectory/predict` answers `503`.
 
 ## API (FastAPI)
 
@@ -208,6 +212,11 @@ This writes raw snapshot files to `data/raw_cs_snapshot` and a monthly role-freq
 under `data/raw_cs_snapshot/metadata/taxonomy_reports/` so allowlist expansion can run on the
 same monthly ingestion cadence.
 
+Postings are written as `year=/month=` parquet partitions and the run resumes by skipping
+partitions that already exist. A partition counts as existing when it holds a `_SUCCESS`
+sentinel (written by current runs) or, for partitions predating the sentinel, any parquet
+file. Delete a `year=/month=` directory to force that month to be refetched.
+
 2) Build DuckDB marts and export processed outputs:
 
 ```bash
@@ -261,6 +270,14 @@ Two related but distinct settings govern trajectory data, both in `config/cs_uni
   `WHERE observed_months >= 12`. This value is hardcoded in SQL (not read from the YAML)
   because `scripts/build_duckdb.py` does not template config values into SQL text today.
   If you change the YAML value, update the SQL literal to match.
+
+`trajectory_ml.train_start_month` and `trajectory_ml.validation_start_month` are the
+authoritative temporal split. `scripts/build_duckdb.py` stamps them into every
+`trajectory_features` row, and `ml.data.temporal_split` reads them back from the config so a
+stale rebuild cannot silently move the evaluation boundary. The embedded columns are only
+used when the config keys are absent, and a disagreement is logged as a warning. Both values
+must be ISO dates (`YYYY-MM-DD`); anything else fails the build instead of being spliced
+into SQL.
 
 ## Forward-Looking Trajectory Labels
 
