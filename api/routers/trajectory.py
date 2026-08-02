@@ -9,8 +9,9 @@ method_version bump. Prefer method="phase1_rules" for anything user-facing
 until then.
 
 The ML model artifact is cached in-process and reloaded automatically when
-its file mtime changes (e.g. after retraining). Set ML_MODEL_PATH to override
-the default artifact location.
+its file mtime changes (e.g. after retraining). ML_MODEL_PATH overrides the
+default artifact location, but only within ml/artifacts (DEFAULT_ARTIFACTS_DIR)
+after path resolution; anything outside is ignored and /predict answers 503.
 """
 
 import logging
@@ -39,7 +40,7 @@ from ml.constants import (
     METHOD,
     METHOD_VERSION,
 )
-from ml.model import load_model
+from ml.model import load_model, load_model_metrics, sklearn_version_mismatch
 
 logger = logging.getLogger(__name__)
 
@@ -49,24 +50,51 @@ router = APIRouter(prefix="/api/v1/trajectory", tags=["trajectory"])
 _model_cache: dict[str, tuple[object, float]] = {}
 
 
-def _get_model_path() -> Path:
-    """Resolve the ML model artifact path, honoring ML_MODEL_PATH override."""
+def _get_model_path() -> Optional[Path]:
+    """Resolve the ML model artifact path, honoring ML_MODEL_PATH override.
+
+    The override is confined to DEFAULT_ARTIFACTS_DIR after resolution so a
+    stray or attacker-controlled environment value cannot make the API unpickle
+    an arbitrary file from disk. Returns None when the override escapes it.
+    """
     override = os.getenv("ML_MODEL_PATH")
-    if override:
-        return Path(override)
-    return DEFAULT_ARTIFACTS_DIR / DEFAULT_MODEL_FILENAME
+    if not override:
+        return DEFAULT_ARTIFACTS_DIR / DEFAULT_MODEL_FILENAME
+
+    artifacts_dir = DEFAULT_ARTIFACTS_DIR.resolve()
+    candidate = Path(override).resolve()
+    if candidate != artifacts_dir and artifacts_dir not in candidate.parents:
+        logger.warning(
+            "Ignoring ML_MODEL_PATH=%s: resolved path %s is outside %s",
+            override,
+            candidate,
+            artifacts_dir,
+        )
+        return None
+    return candidate
 
 
 def _load_cached_model():
     """Load and cache the trajectory classifier, or None if missing.
 
     Reloads when the artifact file mtime changes so retrained models are picked
-    up without restarting the API process.
+    up without restarting the API process. Returns None when the artifact is
+    missing, rejected by the ML_MODEL_PATH containment check, or built by an
+    incompatible sklearn version.
     """
     model_path = _get_model_path()
+    if model_path is None:
+        return None
     cache_key = str(model_path)
     if not model_path.exists():
         return None
+
+    metrics = load_model_metrics(model_path)
+    if metrics is not None:
+        mismatch = sklearn_version_mismatch(metrics)
+        if mismatch is not None:
+            logger.warning("Refusing to load ML model: %s", mismatch)
+            return None
 
     mtime = model_path.stat().st_mtime
     cached = _model_cache.get(cache_key)
@@ -190,6 +218,20 @@ def predict_trajectory(
     model = _load_cached_model()
     if model is None:
         model_path = _get_model_path()
+        if model_path is None:
+            raise HTTPException(
+                status_code=503,
+                detail="ML model artifact not available",
+            )
+        metrics = load_model_metrics(model_path)
+        if metrics is not None:
+            mismatch = sklearn_version_mismatch(metrics)
+            if mismatch is not None:
+                logger.warning("ML model unavailable due to sklearn mismatch: %s", mismatch)
+                raise HTTPException(
+                    status_code=503,
+                    detail=mismatch,
+                )
         logger.warning("ML model artifact not found at %s", model_path)
         raise HTTPException(
             status_code=503,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 import glob
 from pathlib import Path
 import uuid
@@ -19,6 +20,32 @@ from config.revelio_sources import get_duckdb_path, get_processed_dir, get_sourc
 
 def _read_sql(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def _iso_date(value: object, key: str) -> str:
+    """Validate a config value as an ISO date before it is spliced into SQL."""
+    text = str(value).strip()
+    try:
+        datetime.date.fromisoformat(text)
+    except ValueError as exc:
+        raise ValueError(
+            f"trajectory_ml.{key} in config/cs_universe.yml must be an ISO date "
+            f"(YYYY-MM-DD), got {value!r}"
+        ) from exc
+    return text
+
+
+def _render_sql(sql_text: str, cfg: dict) -> str:
+    """Substitute trajectory ML split placeholders from cs_universe.yml."""
+    traj = cfg.get("trajectory_ml") or {}
+    train_start = _iso_date(traj.get("train_start_month", "2023-01-01"), "train_start_month")
+    validation_start = _iso_date(
+        traj.get("validation_start_month", "2025-01-01"), "validation_start_month"
+    )
+    return (
+        sql_text.replace("{{TRAIN_START_MONTH}}", train_start)
+        .replace("{{VALIDATION_START_MONTH}}", validation_start)
+    )
 
 
 def _load_allowlists(con: duckdb.DuckDBPyConnection, cfg: dict) -> None:
@@ -212,7 +239,8 @@ def main() -> None:
         ]
         for sql_name in sql_order:
             print(f"Running {sql_name}...", flush=True)
-            con.execute(_read_sql(SQL_DIR / sql_name))
+            sql_text = _render_sql(_read_sql(SQL_DIR / sql_name), cfg)
+            con.execute(sql_text)
             print(f"  finished {sql_name}", flush=True)
 
         print("Exporting processed parquet/CSV...", flush=True)

@@ -1,3 +1,5 @@
 -r requirements.txt
-scikit-learn>=1.4.0
+# Pinned to one minor line: joblib artifacts are not guaranteed to unpickle across
+# sklearn minor releases, and api/routers/trajectory.py refuses mismatched artifacts.
+scikit-learn>=1.7.0,<1.8.0
 joblib>=1.3.0

@@ -1,4 +1,4 @@
-﻿"""Shared constants for trajectory ML."""
+"""Shared constants for trajectory ML."""
 
 from pathlib import Path
 
@@ -35,6 +35,7 @@ LABEL_HORIZON_MONTHS = 3
 METHOD = "ml_classifier"
 # ml-v2 predicts the forward-looking phase1-v3 target; ml-v1 predicted the circular v2 target.
 METHOD_VERSION = "ml-v2"
+# Rules-derived target label_version that ML predictions describe (not the ML method lineage).
 LABEL_VERSION = "phase1-v3"
 FEATURE_VERSION = "phase1-v1"
 # DuckDB pipeline / trajectory label rules (sql/duckdb/01_stage_revelio.sql).

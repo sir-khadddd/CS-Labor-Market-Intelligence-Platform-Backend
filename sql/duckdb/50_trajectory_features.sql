@@ -3,7 +3,7 @@ WITH role_monthly AS (
     SELECT
         role_id AS entity_id,
         month,
-        SUM(posting_count) AS posting_count
+        CAST(SUM(posting_count) AS BIGINT) AS posting_count
     FROM marts.cs_job_demand
     GROUP BY 1, 2
 ),
@@ -67,8 +67,8 @@ SELECT
     rc.feature_version,
     rc.run_timestamp,
     rc.cs_allowlist_version,
-    '2023-01-01'::DATE AS train_start_month,
-    '2025-01-01'::DATE AS validation_start_month
+    '{{TRAIN_START_MONTH}}'::DATE AS train_start_month,
+    '{{VALIDATION_START_MONTH}}'::DATE AS validation_start_month
 FROM windowed w
 CROSS JOIN stage.run_context rc
 -- Feature emission gate: 12 observed months, since yoy_growth needs a 12-month lag.
