@@ -17,11 +17,67 @@ roles:
     role_name: "data engineer"
   - role_id: "Cyber Engineer"
     role_name: "cyber security analyst"
+  # expanded for trajectory ML panel volume from role_frequency WRDS reports.
+  - role_id: "DevOps Engineering"
+    role_name: "devops engineer"
+  - role_id: "Network Engineer"
+    role_name: "network engineer"
+  - role_id: "Cloud Solutions Engineer"
+    role_name: "cloud solutions engineer"
+  - role_id: "Cybersecurity Engineer"
+    role_name: "security engineer"
+  - role_id: "Database Administrator"
+    role_name: "database administrator"
+  - role_id: "Software Development"
+    role_name: "software developer"
+  - role_id: "Cybersecurity Analyst"
+    role_name: "cybersecurity analyst"
+  - role_id: "Cloud Security Engineer"
+    role_name: "cloud security engineer"
+  - role_id: "Network Security Engineer"
+    role_name: "network security engineer"
+  - role_id: "Database Engineer"
+    role_name: "database engineer"
+  - role_id: "Analytics Data Engineer"
+    role_name: "analytics data engineer"
+  - role_id: "Cybersecurity Architect"
+    role_name: "cybersecurity architect"
+  - role_id: "Data Architecture"
+    role_name: "data architect"
+  - role_id: "Cloud Architecture"
+    role_name: "cloud architect"
+  - role_id: "IT System Administrator"
+    role_name: "system administrator"
+  - role_id: "Software Testing Engineer"
+    role_name: "test engineer"
+  - role_id: "Web Development"
+    role_name: "web developer"
+  - role_id: "Software Architecture"
+    role_name: "software architect"
+  - role_id: "Specialized Data Analyst"
+    role_name: "data analyst"
+  - role_id: "Software Programmer"
+    role_name: "software programmer"
 skills:
   # Apr 2026+ Revelio taxonomy: skill_id = individual_user_skills.skill_k35000 (skill_mapped deprecated).
   # Broader rollups: join individual_user_skill_lookup on skill_k35000 (e.g. skill_k15).
   # Allowlist keys from: python scripts/discover_wrds_skills.py (monthly, see docs/skills_ingest_plan.md).
   # Posting demand marts still need posting-level skills on postings_cosmos or a job bridge table.
 
-minimum_months_for_trajectory: 36  # Target panel length; SQL currently uses 12-month warmup (see README → Trajectory ML)
-min_row_threshold: 5               # Dev snapshot export floor (make_dev_snapshot.py); does not affect Postgres trajectory row count
+# --- Trajectory ML data requirements (see README "Trajectory ML Data Requirements") ---
+# These two settings are intentionally different and must not be conflated:
+#   minimum_months_for_trajectory: the target extract/panel length (36+ months) needed
+#     for credible ML training/eval once the WRDS extract window (config/wrds_extract.yml)
+#     has backfilled enough history. This does NOT gate feature emission today.
+#   min_observed_months_for_features: the minimum trailing observed months required per
+#     entity before a trajectory_features row is emitted (YoY growth needs 12 prior months).
+#     This is enforced in sql/duckdb/50_trajectory_features.sql via
+#     `WHERE w.observed_months >= 12`. The SQL value is hardcoded (not read from this
+#     YAML) because build_duckdb.py does not currently template config values into SQL
+#     text. If you change min_observed_months_for_features here, you MUST also update the
+#     matching literal in sql/duckdb/50_trajectory_features.sql, or wire config injection
+#     into scripts/build_duckdb.py first.
+minimum_months_for_trajectory: 36
+min_observed_months_for_features: 12
+# Dev snapshot export floor (make_dev_snapshot.py); does not affect Postgres trajectory row count.
+min_row_threshold: 5

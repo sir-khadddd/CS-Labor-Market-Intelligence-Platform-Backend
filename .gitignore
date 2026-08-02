@@ -210,3 +210,6 @@ __marimo__/
 data/*
 !data/dev_processed/
 !data/dev_processed/**
+
+# ML artifacts (trained models, eval outputs)
+ml/artifacts/

@@ -230,6 +230,8 @@ python scripts/make_dev_snapshot.py
 
 ```bash
 python scripts/load_postgres.py
+# Or reload a subset without blocking on large tables:
+python scripts/load_postgres.py --tables trajectory_features,trajectory_labels
 ```
 
 ## Phase 1 Lock-Ins Included
@@ -245,6 +247,66 @@ python scripts/load_postgres.py
 
 `data/dev_processed` is safe for GitHub sharing because it contains only aggregated outputs.
 Do not commit raw posting-level exports or individual-level data.
+
+## Trajectory ML Data Requirements
+
+Two related but distinct settings govern trajectory data, both in `config/cs_universe.yml`:
+
+- `minimum_months_for_trajectory: 36` -- target extract/panel length for credible ML
+  training and evaluation. `config/wrds_extract.yml` `extract.start_date` should span at
+  least this many months up to `end_date`.
+- `min_observed_months_for_features: 12` -- minimum trailing observed months required
+  per entity before a `trajectory_features` row is emitted, since YoY growth needs a
+  12-month lag. Enforced in `sql/duckdb/50_trajectory_features.sql` via
+  `WHERE observed_months >= 12`. This value is hardcoded in SQL (not read from the YAML)
+  because `scripts/build_duckdb.py` does not template config values into SQL text today.
+  If you change the YAML value, update the SQL literal to match.
+
+## Forward-Looking Trajectory Labels
+
+`trajectory_class` is a forecasting target, not a restatement of the current month. The label
+attached to month `t` describes the entity's state at `t + 3` months (plus realized posting
+growth from `t` to `t + 3`), while model inputs stay point-in-time at `t`. Earlier versions
+(`phase1-v2` and before) derived the class from a `CASE` over the same month's feature
+columns, which made the classifier circular: it could only re-learn the rule it was trained
+from, and reported accuracy was meaningless.
+
+Consequences to be aware of:
+
+- The last 3 months of the panel have features but no labels, so they are trainable inputs
+  for prediction only, not for supervised fitting.
+- Label semantics changed, so labels are versioned `phase1-v3` (rule `method_version`
+  `rules-v3`, ML `method_version` `ml-v2`). Rows written under older versions are not
+  comparable and should not be mixed into a single training set.
+- Existing DuckDB output, processed CSVs, dev snapshot, and Postgres rows still carry the
+  old labels until you rebuild:
+
+```bash
+python scripts/build_duckdb.py
+python scripts/make_dev_snapshot.py
+python scripts/load_postgres.py --tables trajectory_features,trajectory_labels
+python scripts/train_trajectory_model.py --source postgres
+python scripts/predict_trajectory_model.py --source postgres
+```
+
+## ML Label Rows Are Not Durable Across Loads
+
+`analytics.trajectory_labels` holds both rule labels (`method=phase1_rules`, produced by
+the DuckDB pipeline) and ML predictions (`method=ml_classifier`, produced by
+`scripts/predict_trajectory_model.py`). Only the rule labels exist in
+`data/processed/trajectory_labels.csv`.
+
+`scripts/load_postgres.py` reloads a table by `TRUNCATE` then `COPY`, so any run that
+includes `trajectory_labels` (including a full load with no `--tables`) deletes every
+`ml_classifier` row. `GET /api/v1/trajectory/labels?method=ml_classifier` returns nothing
+until predictions are regenerated:
+
+```bash
+python scripts/predict_trajectory_model.py --source postgres
+```
+
+Training is unaffected: `ml.data.join_trajectory_dataset` filters labels to
+`method=phase1_rules` before deduping, so ML rows are never used as training targets.
 
 ## Industry Dimension Note
 

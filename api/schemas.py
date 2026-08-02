@@ -1,6 +1,6 @@
 """Pydantic schemas for API responses."""
 
-from datetime import date
+from datetime import date, datetime
 from typing import Optional, List
 from pydantic import BaseModel, Field
 
@@ -108,6 +108,7 @@ class TrajectoryFeatureRecord(BaseModel):
     volatility_12m: Optional[float] = None
     demand_concentration_index: Optional[float] = None
     momentum_score: Optional[float] = None
+    feature_version: str
 
 
 class TrajectoryFeatureResponse(BaseModel):
@@ -129,6 +130,7 @@ class TrajectoryLabelRecord(BaseModel):
     method: str
     label_version: str
     method_version: str
+    run_timestamp: datetime
 
 
 class TrajectoryLabelResponse(BaseModel):
@@ -137,6 +139,17 @@ class TrajectoryLabelResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class TrajectoryPredictionResponse(BaseModel):
+    """ML trajectory classifier prediction response (experimental baseline)."""
+    entity_type: str
+    entity_id: str
+    month: date
+    trajectory_class: str
+    confidence: Optional[float] = None
+    method: str
+    method_version: str
 
 
 class TimeSeriesRecord(BaseModel):

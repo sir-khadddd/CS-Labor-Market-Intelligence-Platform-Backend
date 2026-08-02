@@ -52,39 +52,21 @@ def main() -> None:
             ),
             (
                 "trajectory_features",
-                """
-                SELECT * EXCLUDE (rn)
-                FROM (
-                    SELECT
-                        *,
-                        ROW_NUMBER() OVER (
-                            PARTITION BY entity_type, entity_id, month
-                            ORDER BY posting_count DESC
-                        ) AS rn
-                    FROM tmp_trajectory_features
-                )
-                WHERE rn = 1
-                ORDER BY month DESC
-                LIMIT 25000
-                """,
+                "SELECT * FROM tmp_trajectory_features "
+                "QUALIFY ROW_NUMBER() OVER ("
+                "PARTITION BY entity_type, entity_id, month "
+                "ORDER BY posting_count DESC"
+                ") = 1 "
+                "ORDER BY month DESC LIMIT 25000",
             ),
             (
                 "trajectory_labels",
-                """
-                SELECT * EXCLUDE (rn)
-                FROM (
-                    SELECT
-                        *,
-                        ROW_NUMBER() OVER (
-                            PARTITION BY entity_type, entity_id, month
-                            ORDER BY confidence DESC NULLS LAST
-                        ) AS rn
-                    FROM tmp_trajectory_labels
-                )
-                WHERE rn = 1
-                ORDER BY month DESC
-                LIMIT 25000
-                """,
+                "SELECT * FROM tmp_trajectory_labels "
+                "QUALIFY ROW_NUMBER() OVER ("
+                "PARTITION BY entity_type, entity_id, month "
+                "ORDER BY confidence DESC NULLS LAST"
+                ") = 1 "
+                "ORDER BY month DESC LIMIT 25000",
             ),
         ]
 

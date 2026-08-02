@@ -5,8 +5,8 @@ CREATE OR REPLACE TABLE stage.run_context AS
 SELECT
     CAST(current_timestamp AS TIMESTAMP) AS run_timestamp,
     'phase1-v1'::VARCHAR AS feature_version,
-    'phase1-v1'::VARCHAR AS label_version,
-    'rules-v1'::VARCHAR AS method_version,
+    'phase1-v3'::VARCHAR AS label_version,
+    'rules-v3'::VARCHAR AS method_version,
     '2026.04'::VARCHAR AS cs_allowlist_version;
 
 CREATE OR REPLACE TABLE stage.dim_role AS
