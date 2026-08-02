@@ -348,7 +348,7 @@ def _fetch_postings_by_month(
         year, month = span_start.year, span_start.month
         if flush and resume and _partition_exists(out_dir, year, month):
             print(
-                f"Skipping postings_cosmos {label} ({i}/{total_months}) — partition exists",
+                f"Skipping postings_cosmos {label} ({i}/{total_months}) - partition exists",
                 flush=True,
             )
             continue

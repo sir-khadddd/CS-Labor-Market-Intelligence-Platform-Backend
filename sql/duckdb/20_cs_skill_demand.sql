@@ -6,7 +6,7 @@ WITH skill_monthly AS (
         role_id,
         skill_id,
         any_value(skill_name) AS skill_name,
-        SUM(posting_count) AS skill_posting_count
+        CAST(SUM(posting_count) AS BIGINT) AS skill_posting_count
     FROM stage.cs_postings
     GROUP BY 1, 2, 3, 4
 ),
@@ -15,7 +15,7 @@ role_totals AS (
         month,
         geo_id,
         role_id,
-        SUM(posting_count) AS role_posting_count
+        CAST(SUM(posting_count) AS BIGINT) AS role_posting_count
     FROM stage.cs_postings
     GROUP BY 1, 2, 3
 ),

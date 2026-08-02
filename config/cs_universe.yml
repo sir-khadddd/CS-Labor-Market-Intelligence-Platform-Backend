@@ -77,3 +77,9 @@ skills:
 minimum_months_for_trajectory: 36
 min_observed_months_for_features: 12
 min_row_threshold: 5
+
+# Temporal train/validation split embedded in trajectory_features (templated into
+# sql/duckdb/50_trajectory_features.sql by scripts/build_duckdb.py).
+trajectory_ml:
+  train_start_month: "2023-01-01"
+  validation_start_month: "2025-01-01"

@@ -8,7 +8,7 @@ WITH monthly AS (
         any_value(p.industry_name) AS industry_name,
         p.role_id,
         any_value(p.role_name) AS role_name,
-        SUM(p.posting_count) AS posting_count
+        CAST(SUM(p.posting_count) AS BIGINT) AS posting_count
     FROM stage.cs_postings p
     GROUP BY 1, 2, 4, 6
 ),

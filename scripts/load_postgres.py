@@ -146,7 +146,7 @@ def _iter_cleaned_csv_lines(csv_path: Path, table_name: str):
             return
 
         out = io.StringIO()
-        writer = csv.writer(out, lineterminator="\n")
+        writer = csv.writer(out, lineterminator="\n", quoting=csv.QUOTE_NONNUMERIC)
         writer.writerow(header)
         yield out.getvalue()
 

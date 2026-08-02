@@ -119,3 +119,27 @@ def test_temporal_split_by_validation_start_month():
     assert all(validation["month"] >= datetime(2024, 6, 1))
     assert len(train) == 1
     assert len(validation) == 2
+
+
+def test_temporal_split_warns_on_config_mismatch(caplog):
+    dataset = pd.DataFrame(
+        [
+            _feature_row(
+                month=pd.Timestamp("2024-03-01"),
+                validation_start_month=pd.Timestamp("2024-06-01"),
+                train_start_month=pd.Timestamp("2098-01-01"),
+            ),
+            _feature_row(
+                month=pd.Timestamp("2024-07-01"),
+                validation_start_month=pd.Timestamp("2024-06-01"),
+                train_start_month=pd.Timestamp("2098-01-01"),
+            ),
+        ]
+    )
+    dataset["trajectory_class"] = "stable_growth"
+    with caplog.at_level("WARNING"):
+        train, validation = temporal_split(dataset)
+    assert len(train) == 1
+    assert len(validation) == 1
+    assert any("validation_start_month in dataset" in record.message for record in caplog.records)
+    assert any("train_start_month in dataset" in record.message for record in caplog.records)

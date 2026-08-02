@@ -39,7 +39,7 @@ from ml.constants import (
     METHOD,
     METHOD_VERSION,
 )
-from ml.model import load_model
+from ml.model import load_model, load_model_metrics, sklearn_major_version_mismatch
 
 logger = logging.getLogger(__name__)
 
@@ -61,12 +61,20 @@ def _load_cached_model():
     """Load and cache the trajectory classifier, or None if missing.
 
     Reloads when the artifact file mtime changes so retrained models are picked
-    up without restarting the API process.
+    up without restarting the API process. Returns None when the artifact is
+    missing or sklearn major version is incompatible with training metadata.
     """
     model_path = _get_model_path()
     cache_key = str(model_path)
     if not model_path.exists():
         return None
+
+    metrics = load_model_metrics(model_path)
+    if metrics is not None:
+        mismatch = sklearn_major_version_mismatch(metrics)
+        if mismatch is not None:
+            logger.warning("Refusing to load ML model: %s", mismatch)
+            return None
 
     mtime = model_path.stat().st_mtime
     cached = _model_cache.get(cache_key)
@@ -190,6 +198,15 @@ def predict_trajectory(
     model = _load_cached_model()
     if model is None:
         model_path = _get_model_path()
+        metrics = load_model_metrics(model_path)
+        if metrics is not None:
+            mismatch = sklearn_major_version_mismatch(metrics)
+            if mismatch is not None:
+                logger.warning("ML model unavailable due to sklearn mismatch: %s", mismatch)
+                raise HTTPException(
+                    status_code=503,
+                    detail=mismatch,
+                )
         logger.warning("ML model artifact not found at %s", model_path)
         raise HTTPException(
             status_code=503,

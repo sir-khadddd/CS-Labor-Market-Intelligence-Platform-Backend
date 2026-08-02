@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from pathlib import Path
@@ -10,6 +11,7 @@ from typing import Any
 import joblib
 import pandas as pd
 import psycopg
+import sklearn
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
@@ -71,6 +73,7 @@ def train_trajectory_classifier(
         {
             "method": METHOD,
             "method_version": METHOD_VERSION,
+            "sklearn_version": sklearn.__version__,
             "feature_columns": FEATURE_COLUMNS,
             "train_rows": len(train_df),
             "validation_rows": len(validation_df),
@@ -102,6 +105,34 @@ def save_model(
     joblib.dump(pipeline, model_path)
     pd.Series(metrics).to_json(metadata_path, indent=2)
     return model_path
+
+
+def metrics_path_for_model(model_path: Path) -> Path:
+    """Sidecar metrics JSON path for a persisted model artifact."""
+    return model_path.parent / f"{model_path.stem}_metrics.json"
+
+
+def load_model_metrics(model_path: Path) -> dict[str, Any] | None:
+    """Load sidecar metrics JSON if present."""
+    metrics_path = metrics_path_for_model(model_path)
+    if not metrics_path.exists():
+        return None
+    return json.loads(metrics_path.read_text(encoding="utf-8"))
+
+
+def sklearn_major_version_mismatch(metrics: dict[str, Any]) -> str | None:
+    """Return an error message when artifact/runtime sklearn majors differ."""
+    trained = metrics.get("sklearn_version")
+    if not trained:
+        return None
+    trained_major = str(trained).split(".", 1)[0]
+    runtime_major = sklearn.__version__.split(".", 1)[0]
+    if trained_major != runtime_major:
+        return (
+            f"sklearn major version mismatch: artifact={trained}, "
+            f"runtime={sklearn.__version__}"
+        )
+    return None
 
 
 def load_model(model_path: Path) -> Pipeline:

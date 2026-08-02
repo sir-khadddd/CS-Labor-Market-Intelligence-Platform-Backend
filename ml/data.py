@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Literal
 
 import pandas as pd
 import psycopg
+import yaml
 
 from config.postgres import get_postgres_dsn
 from ml.constants import DEV_PROCESSED_DIR, FEATURE_COLUMNS, FEATURE_VERSION, LABEL_VERSION
+
+logger = logging.getLogger(__name__)
+CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "cs_universe.yml"
 
 
 def _load_csv_tables(data_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -122,12 +127,48 @@ def load_trajectory_dataset(
     )
 
 
+def _load_trajectory_split_config() -> dict[str, pd.Timestamp]:
+    """Read train/validation split months from cs_universe.yml."""
+    cfg = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
+    traj = cfg.get("trajectory_ml") or {}
+    return {
+        "train_start_month": pd.to_datetime(traj.get("train_start_month", "2023-01-01")),
+        "validation_start_month": pd.to_datetime(
+            traj.get("validation_start_month", "2025-01-01")
+        ),
+    }
+
+
+def _warn_split_config_mismatch(dataset: pd.DataFrame) -> None:
+    """Log when embedded split months disagree with cs_universe.yml."""
+    expected = _load_trajectory_split_config()
+    for column in ("train_start_month", "validation_start_month"):
+        if column not in dataset.columns:
+            continue
+        values = pd.to_datetime(dataset[column].dropna().unique())
+        if len(values) > 1:
+            logger.warning("Multiple %s values in dataset: %s", column, values.tolist())
+        if len(values) == 0:
+            continue
+        actual = values[0]
+        expected_value = expected[column]
+        if actual != expected_value:
+            logger.warning(
+                "%s in dataset (%s) differs from config/cs_universe.yml (%s)",
+                column,
+                actual.date(),
+                expected_value.date(),
+            )
+
+
 def temporal_split(
     dataset: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Split dataset using validation_start_month embedded in features."""
     if dataset.empty:
         raise ValueError("Cannot split an empty trajectory dataset")
+
+    _warn_split_config_mismatch(dataset)
 
     validation_start = pd.to_datetime(dataset["validation_start_month"].iloc[0])
     train = dataset[dataset["month"] < validation_start].copy()

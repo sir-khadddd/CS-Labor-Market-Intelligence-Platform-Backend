@@ -4,8 +4,11 @@ Loads the persisted classifier and the latest trajectory features (from
 Postgres by default, or dev CSVs with --source dev), predicts
 trajectory_class per entity-month, and writes results into
 analytics.trajectory_labels tagged with method=ml_classifier. Writes are
-idempotent: existing rows for the same (entity_type, method_version) are
-replaced via delete-then-insert with an ON CONFLICT upsert as a safety net.
+idempotent: prior ML rows for the entity_type (any method_version) are deleted
+before insert, with an ON CONFLICT upsert as a safety net.
+
+ML rows use label_version to record the rules-derived target being predicted
+(see ml.constants.LABEL_VERSION), not the ML method lineage.
 """
 
 from __future__ import annotations
@@ -131,7 +134,10 @@ def predict(pipeline, features: pd.DataFrame) -> pd.DataFrame:
 
 
 def _upsert_postgres(predictions: pd.DataFrame, entity_type: str) -> bool:
-    """Delete-then-insert ML predictions for this entity_type/method_version.
+    """Delete-then-insert ML predictions for this entity_type.
+
+    Removes all prior ml_classifier rows for the entity_type (any method_version)
+    so stale ml-v1 rows are not orphaned when promoting to ml-v2.
 
     Returns True on success, False if Postgres is unavailable.
     """
@@ -141,8 +147,8 @@ def _upsert_postgres(predictions: pd.DataFrame, entity_type: str) -> bool:
             with conn.cursor() as cur:
                 cur.execute(
                     "DELETE FROM analytics.trajectory_labels "
-                    "WHERE method_version = %s AND entity_type = %s",
-                    (METHOD_VERSION, entity_type),
+                    "WHERE method = %s AND entity_type = %s",
+                    (METHOD, entity_type),
                 )
                 rows = [
                     (
