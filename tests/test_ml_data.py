@@ -99,6 +99,51 @@ def test_join_trajectory_dataset_inner_join_on_entity_month():
     assert result.iloc[0]["trajectory_class"] == "stable_growth"
 
 
+def test_join_trajectory_dataset_keeps_rules_label_over_higher_confidence_ml():
+    features = pd.DataFrame([_feature_row(entity_id="R1")])
+    labels = pd.DataFrame(
+        [
+            _label_row(
+                entity_id="R1",
+                trajectory_class="stable_growth",
+                confidence=0.4,
+                method="phase1_rules",
+                method_version="rules-v3",
+            ),
+            _label_row(
+                entity_id="R1",
+                trajectory_class="declining",
+                confidence=0.99,
+                method="ml_classifier",
+                method_version="ml-v2",
+            ),
+        ]
+    )
+    result = join_trajectory_dataset(features, labels, method="phase1_rules")
+    assert len(result) == 1
+    assert result.iloc[0]["method"] == "phase1_rules"
+    assert result.iloc[0]["trajectory_class"] == "stable_growth"
+
+
+def test_join_trajectory_dataset_without_method_filter_keeps_highest_confidence():
+    features = pd.DataFrame([_feature_row(entity_id="R1")])
+    labels = pd.DataFrame(
+        [
+            _label_row(entity_id="R1", confidence=0.4, method="phase1_rules"),
+            _label_row(
+                entity_id="R1",
+                trajectory_class="declining",
+                confidence=0.99,
+                method="ml_classifier",
+                method_version="ml-v2",
+            ),
+        ]
+    )
+    result = join_trajectory_dataset(features, labels, method=None)
+    assert len(result) == 1
+    assert result.iloc[0]["method"] == "ml_classifier"
+
+
 def test_temporal_split_empty_raises():
     empty = pd.DataFrame()
     with pytest.raises(ValueError, match="empty trajectory dataset"):

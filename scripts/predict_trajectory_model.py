@@ -9,6 +9,11 @@ before insert, with an ON CONFLICT upsert as a safety net.
 
 ML rows use label_version to record the rules-derived target being predicted
 (see ml.constants.LABEL_VERSION), not the ML method lineage.
+
+These rows are not durable. scripts/load_postgres.py reloads analytics tables
+with TRUNCATE + COPY from data/processed CSVs, and those CSVs carry rule labels
+only, so any load that includes trajectory_labels deletes every ml_classifier
+row. Re-run this script after such a load to restore ML predictions.
 """
 
 from __future__ import annotations

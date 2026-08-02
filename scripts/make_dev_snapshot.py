@@ -55,7 +55,7 @@ def main() -> None:
                 "SELECT * FROM tmp_trajectory_features "
                 "QUALIFY ROW_NUMBER() OVER ("
                 "PARTITION BY entity_type, entity_id, month "
-                "ORDER BY run_timestamp DESC"
+                "ORDER BY posting_count DESC"
                 ") = 1 "
                 "ORDER BY month DESC LIMIT 25000",
             ),
@@ -64,7 +64,7 @@ def main() -> None:
                 "SELECT * FROM tmp_trajectory_labels "
                 "QUALIFY ROW_NUMBER() OVER ("
                 "PARTITION BY entity_type, entity_id, month "
-                "ORDER BY run_timestamp DESC"
+                "ORDER BY confidence DESC NULLS LAST"
                 ") = 1 "
                 "ORDER BY month DESC LIMIT 25000",
             ),

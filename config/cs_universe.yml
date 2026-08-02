@@ -59,7 +59,10 @@ roles:
   - role_id: "Software Programmer"
     role_name: "software programmer"
 skills:
-  # Fill when structured skill keys are wired (e.g. individual_user_skills.skill_mapped).
+  # Apr 2026+ Revelio taxonomy: skill_id = individual_user_skills.skill_k35000 (skill_mapped deprecated).
+  # Broader rollups: join individual_user_skill_lookup on skill_k35000 (e.g. skill_k15).
+  # Allowlist keys from: python scripts/discover_wrds_skills.py (monthly, see docs/skills_ingest_plan.md).
+  # Posting demand marts still need posting-level skills on postings_cosmos or a job bridge table.
 
 # --- Trajectory ML data requirements (see README "Trajectory ML Data Requirements") ---
 # These two settings are intentionally different and must not be conflated:
@@ -76,6 +79,7 @@ skills:
 #     into scripts/build_duckdb.py first.
 minimum_months_for_trajectory: 36
 min_observed_months_for_features: 12
+# Dev snapshot export floor (make_dev_snapshot.py); does not affect Postgres trajectory row count.
 min_row_threshold: 5
 
 # Temporal train/validation split embedded in trajectory_features (templated into

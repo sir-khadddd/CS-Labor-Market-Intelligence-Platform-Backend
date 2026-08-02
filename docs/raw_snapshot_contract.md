@@ -63,9 +63,13 @@ If posting rows have null `rcid`, industry remains unknown.
 `config/cs_universe.yml` values must use real WRDS taxonomy keys:
 
 - `roles.role_id` values map to `role_k17000_v3`
-- `skills.skill_id` values map to structured skill keys when enabled
+- `skills.skill_id` values map to **`individual_user_skills.skill_k35000`** (Revelio Apr 2026+; `skill_mapped` deprecated)
+- Broader skill buckets: `individual_user_skill_lookup` joined on `skill_k35000` (e.g. up to `skill_k15`)
 
 If both role and skill allowlists are empty, transforms run in pass-through mode.
+
+Posting-level skill ingest for demand marts is separate; run `python scripts/discover_wrds_skills.py`
+and see `docs/skills_ingest_plan.md`.
 
 ## Lineage and QA artifacts
 
