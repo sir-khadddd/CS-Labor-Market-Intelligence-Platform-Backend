@@ -64,7 +64,12 @@ def join_trajectory_dataset(
     entity_type: str = "role",
     method: str | None = "phase1_rules",
 ) -> pd.DataFrame:
-    """Join features and labels on entity-month keys."""
+    """Join features and labels on entity-month keys.
+
+    The join is inner by design: labels are forward-looking over
+    LABEL_HORIZON_MONTHS, so the last months of the panel have features but no
+    outcome yet and must be dropped from supervised training.
+    """
     features = features[features["feature_version"] == FEATURE_VERSION].copy()
     labels = labels[labels["label_version"] == LABEL_VERSION].copy()
 

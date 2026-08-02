@@ -108,6 +108,32 @@ Two related but distinct settings govern trajectory data, both in `config/cs_uni
   because `scripts/build_duckdb.py` does not template config values into SQL text today.
   If you change the YAML value, update the SQL literal to match.
 
+## Forward-Looking Trajectory Labels
+
+`trajectory_class` is a forecasting target, not a restatement of the current month. The label
+attached to month `t` describes the entity's state at `t + 3` months (plus realized posting
+growth from `t` to `t + 3`), while model inputs stay point-in-time at `t`. Earlier versions
+(`phase1-v2` and before) derived the class from a `CASE` over the same month's feature
+columns, which made the classifier circular: it could only re-learn the rule it was trained
+from, and reported accuracy was meaningless.
+
+Consequences to be aware of:
+
+- The last 3 months of the panel have features but no labels, so they are trainable inputs
+  for prediction only, not for supervised fitting.
+- Label semantics changed, so labels are versioned `phase1-v3` (rule `method_version`
+  `rules-v3`, ML `method_version` `ml-v2`). Rows written under older versions are not
+  comparable and should not be mixed into a single training set.
+- Existing DuckDB output, processed CSVs, dev snapshot, and Postgres rows still carry the
+  old labels until you rebuild:
+
+```bash
+python scripts/build_duckdb.py
+python scripts/make_dev_snapshot.py
+python scripts/load_postgres.py --tables trajectory_features,trajectory_labels
+python scripts/train_trajectory_model.py --source postgres
+```
+
 ## Industry Dimension Note
 
 `rics_k50`, `rics_k200`, and `rics_k400` are attached via `revelio_common.company_mapping`.

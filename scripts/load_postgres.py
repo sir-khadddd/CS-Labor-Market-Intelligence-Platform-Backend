@@ -23,6 +23,12 @@ from config.postgres import (
     get_postgres_dsn,
     redact_postgres_dsn,
 )
+from ml.constants import (
+    CS_ALLOWLIST_VERSION,
+    FEATURE_VERSION,
+    LABEL_VERSION,
+    RULES_METHOD_VERSION,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,7 +39,11 @@ logger = logging.getLogger(__name__)
 
 SQL_SCHEMA = ROOT / "sql" / "postgres" / "schema.sql"
 SQL_METADATA = ROOT / "sql" / "postgres" / "metadata_contracts.sql"
+SQL_INDEXES = ROOT / "sql" / "postgres" / "indexes.sql"
 PROCESSED_DIR = ROOT / "data" / "processed"
+
+LOCK_TIMEOUT = "30s"
+STATEMENT_TIMEOUT = "0"
 
 COPY_PROGRESS_EVERY_ROWS = 500_000
 
@@ -57,50 +67,29 @@ TABLE_PRIMARY_KEYS: dict[str, list[str]] = {
     "trajectory_labels": ["entity_type", "entity_id", "month", "label_version", "method_version"],
 }
 
-TABLE_INDEXES: dict[str, list[str]] = {
-    "cs_job_demand": [
-        "CREATE INDEX IF NOT EXISTS idx_job_demand_role_month "
-        "ON analytics.cs_job_demand (role_id, month DESC);",
-        "CREATE INDEX IF NOT EXISTS idx_job_demand_industry_month "
-        "ON analytics.cs_job_demand (industry_id, month DESC);",
-    ],
-    "cs_skill_demand": [
-        "CREATE INDEX IF NOT EXISTS idx_skill_demand_skill_month "
-        "ON analytics.cs_skill_demand (skill_id, month DESC);",
-    ],
-    "role_skill_associations": [
-        "CREATE INDEX IF NOT EXISTS idx_role_skill_lift_month "
-        "ON analytics.role_skill_associations (month DESC, lift DESC);",
-    ],
-    "salary_distribution": [
-        "CREATE INDEX IF NOT EXISTS idx_salary_role_geo_month "
-        "ON analytics.salary_distribution (role_id, geo_id, month DESC);",
-    ],
-    "trajectory_labels": [
-        "CREATE INDEX IF NOT EXISTS idx_traj_labels_entity_month "
-        "ON analytics.trajectory_labels (entity_type, entity_id, month DESC);",
-    ],
-}
-
-DEBUG_LOG_PATH = ROOT / "debug-cb38af.log"
+INDEX_STMT_PATTERN = re.compile(
+    r"(CREATE INDEX IF NOT EXISTS\s+\S+\s+ON analytics\.(\w+)\s+\([^;]+\);)",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
-def _debug_log(hypothesis_id: str, location: str, message: str, data: dict) -> None:
-    # #region agent log
-    import json
+def _load_table_indexes() -> dict[str, list[str]]:
+    """Parse sql/postgres/indexes.sql (source of truth for analytics indexes)."""
+    text = SQL_INDEXES.read_text(encoding="utf-8")
+    indexes: dict[str, list[str]] = {}
+    for match in INDEX_STMT_PATTERN.finditer(text):
+        stmt = re.sub(r"\s+", " ", match.group(1).strip())
+        table_name = match.group(2)
+        indexes.setdefault(table_name, []).append(stmt)
+    return indexes
 
-    payload = {
-        "sessionId": "cb38af",
-        "hypothesisId": hypothesis_id,
-        "location": location,
-        "message": message,
-        "data": data,
-        "timestamp": int(time.time() * 1000),
-        "runId": "pre-fix",
-    }
-    with DEBUG_LOG_PATH.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(payload) + "\n")
-    # #endregion
+
+TABLE_INDEXES = _load_table_indexes()
+
+
+def _configure_session(cur: psycopg.Cursor) -> None:
+    cur.execute(f"SET lock_timeout = '{LOCK_TIMEOUT}'")
+    cur.execute(f"SET statement_timeout = '{STATEMENT_TIMEOUT}'")
 
 
 def _check_csv_primary_keys(table_name: str, csv_path: Path) -> dict[str, int]:
@@ -114,12 +103,6 @@ def _check_csv_primary_keys(table_name: str, csv_path: Path) -> dict[str, int]:
         "duplicate_rows": duplicate_rows,
         "distinct_keys": distinct_keys,
     }
-    _debug_log(
-        "H1",
-        "load_postgres.py:_check_csv_primary_keys",
-        "csv primary key scan",
-        {"table": table_name, **stats},
-    )
     if duplicate_rows:
         logger.error(
             "%s CSV has %s duplicate primary-key rows (%s total, %s distinct keys)",
@@ -252,12 +235,25 @@ def _resolve_tables(tables_arg: str | None) -> list[str]:
     return selected
 
 
-def _setup_database(conn: psycopg.Connection, *, full_rebuild: bool) -> None:
+def _drop_analytics_tables(cur: psycopg.Cursor, tables: list[str]) -> None:
+    for table in tables:
+        logger.info("Dropping analytics.%s for schema refresh", table)
+        cur.execute(f"DROP TABLE IF EXISTS analytics.{table};")
+
+
+def _setup_database(
+    conn: psycopg.Connection,
+    *,
+    full_rebuild: bool,
+    selected_tables: list[str],
+) -> None:
+    tables_to_drop = list(ANALYTICS_TABLES) if full_rebuild else selected_tables
+
     with conn.cursor() as cur:
-        if full_rebuild:
-            for table in ANALYTICS_TABLES:
-                logger.info("Dropping analytics.%s if present", table)
-                cur.execute(f"DROP TABLE IF EXISTS analytics.{table} CASCADE;")
+        _configure_session(cur)
+
+        if tables_to_drop:
+            _drop_analytics_tables(cur, tables_to_drop)
 
         _exec_file(cur, SQL_SCHEMA, "schema")
         _exec_file(cur, SQL_METADATA, "metadata contracts")
@@ -302,9 +298,12 @@ def main() -> None:
     logger.info("Starting Postgres load (run_id=%s, dsn=%s)", run_id, safe_dsn)
     logger.info("Processed CSV directory: %s", PROCESSED_DIR)
     if full_rebuild:
-        logger.info("Loading all configured analytics tables")
+        logger.info("Loading all configured analytics tables (full rebuild)")
     else:
-        logger.info("Loading selected analytics tables: %s", ", ".join(tables))
+        logger.info(
+            "Loading selected analytics tables (schema refresh before load): %s",
+            ", ".join(tables),
+        )
 
     logger.info("Checking Postgres connectivity...")
     health = check_postgres_health()
@@ -322,7 +321,7 @@ def main() -> None:
     row_counts: dict[str, int] = {}
 
     with psycopg.connect(dsn, connect_timeout=30) as conn:
-        _setup_database(conn, full_rebuild=full_rebuild)
+        _setup_database(conn, full_rebuild=full_rebuild, selected_tables=tables)
 
         for table in tables:
             csv_path = PROCESSED_DIR / f"{table}.csv"
@@ -342,7 +341,14 @@ def main() -> None:
                 )
                 ON CONFLICT (run_id) DO NOTHING;
                 """,
-                (run_id, "phase1-v1", "phase1-v1", "rules-v1", "2026.04", "local load"),
+                (
+                    run_id,
+                    FEATURE_VERSION,
+                    LABEL_VERSION,
+                    RULES_METHOD_VERSION,
+                    CS_ALLOWLIST_VERSION,
+                    "local load",
+                ),
             )
         logger.info("Committing pipeline run metadata...")
         conn.commit()

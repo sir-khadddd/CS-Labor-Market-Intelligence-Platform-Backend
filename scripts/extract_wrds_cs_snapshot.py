@@ -6,6 +6,7 @@ from datetime import date, datetime, timedelta
 import json
 import os
 from pathlib import Path
+import shutil
 import sys
 import time
 import uuid
@@ -24,6 +25,7 @@ from config.revelio_sources import get_source_root
 
 CONFIG_PATH = ROOT / "config" / "wrds_extract.yml"
 CS_UNIVERSE_PATH = ROOT / "config" / "cs_universe.yml"
+_PARTITION_SUCCESS = "_SUCCESS"
 
 
 def _quote_sql_literal(value: str) -> str:
@@ -130,21 +132,35 @@ def _build_company_mapping_sql_in_rcids(table_cfg: dict, rcids: list[int]) -> st
     return f"SELECT {columns} FROM {schema}.{table} WHERE rcid IN ({in_list})"
 
 
+def _partition_dir(out_dir: Path, year: int, month: int) -> Path:
+    return out_dir / f"year={year}" / f"month={month}"
+
+
+def _complete_parquet_paths(postings_out: Path) -> list[Path]:
+    if not postings_out.exists():
+        return []
+    paths: list[Path] = []
+    for success in postings_out.rglob(_PARTITION_SUCCESS):
+        paths.extend(p for p in success.parent.glob("*.parquet") if p.is_file())
+    return paths
+
+
 def _rcids_and_role_counts_from_postings_parquet(postings_out: Path) -> tuple[set[int], dict[str, int], int]:
-    """Aggregate rcids / role counts / row count from already-written month partitions."""
-    if not postings_out.exists() or not any(postings_out.rglob("*.parquet")):
+    """Aggregate rcids / role counts / row count from complete month partitions."""
+    parquet_paths = _complete_parquet_paths(postings_out)
+    if not parquet_paths:
         return set(), {}, 0
-    glob_path = str(postings_out / "**" / "*.parquet").replace("\\", "/")
+    paths_sql = ", ".join(f"'{p.as_posix()}'" for p in parquet_paths)
     con = duckdb.connect()
     try:
-        row_count = int(con.execute(f"SELECT COUNT(*) FROM read_parquet('{glob_path}')").fetchone()[0])
+        row_count = int(con.execute(f"SELECT COUNT(*) FROM read_parquet([{paths_sql}])").fetchone()[0])
         rcid_rows = con.execute(
-            f"SELECT DISTINCT CAST(rcid AS BIGINT) AS rcid FROM read_parquet('{glob_path}') WHERE rcid IS NOT NULL"
+            f"SELECT DISTINCT CAST(rcid AS BIGINT) AS rcid FROM read_parquet([{paths_sql}]) WHERE rcid IS NOT NULL"
         ).fetchall()
         role_rows = con.execute(
             f"""
             SELECT COALESCE(CAST(role_k17000_v3 AS VARCHAR), 'NULL') AS role_id, COUNT(*) AS c
-            FROM read_parquet('{glob_path}')
+            FROM read_parquet([{paths_sql}])
             GROUP BY 1
             """
         ).fetchall()
@@ -171,7 +187,7 @@ def _fetch_company_mapping_for_postings(
     rcids: list[int] | set[int] | None = None,
     chunk_size: int = 2000,
     max_retries: int = 5,
-) -> pd.DataFrame:
+) -> tuple[pd.DataFrame, wrds.Connection]:
     """Pull company_mapping rows only for rcids present in postings (matches staging join on rcid)."""
     table_cfg = cfg["tables"]["company_mapping"]
     if rcids is None:
@@ -180,7 +196,7 @@ def _fetch_company_mapping_for_postings(
         rcid_list = sorted({int(x) for x in rcids})
     if not rcid_list:
         print("company_mapping: no distinct rcid in postings; writing empty extract.", flush=True)
-        return pd.DataFrame(columns=list(table_cfg["select_columns"]))
+        return pd.DataFrame(columns=list(table_cfg["select_columns"])), db
 
     chunks_sql = [rcid_list[i : i + chunk_size] for i in range(0, len(rcid_list), chunk_size)]
     print(
@@ -217,7 +233,7 @@ def _fetch_company_mapping_for_postings(
     out = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=list(table_cfg["select_columns"]))
     if "rcid" in out.columns:
         out = out.drop_duplicates(subset=["rcid"], keep="first")
-    return out
+    return out, db
 
 
 def _write_partitioned_parquet(df: pd.DataFrame, out_dir: Path, partition_cols: list[str]) -> None:
@@ -274,10 +290,18 @@ def _write_role_frequency_report(
 
 
 def _partition_exists(out_dir: Path, year: int, month: int) -> bool:
-    part_dir = out_dir / f"year={year}" / f"month={month}"
-    if not part_dir.is_dir():
-        return False
-    return any(part_dir.glob("*.parquet"))
+    return (_partition_dir(out_dir, year, month) / _PARTITION_SUCCESS).is_file()
+
+
+def _mark_partition_complete(part_dir: Path) -> None:
+    part_dir.mkdir(parents=True, exist_ok=True)
+    (part_dir / _PARTITION_SUCCESS).write_text("", encoding="utf-8")
+
+
+def _clear_incomplete_partition(out_dir: Path, year: int, month: int) -> None:
+    part_dir = _partition_dir(out_dir, year, month)
+    if part_dir.is_dir() and not _partition_exists(out_dir, year, month):
+        shutil.rmtree(part_dir)
 
 
 def _fetch_postings_by_month(
@@ -345,6 +369,8 @@ def _fetch_postings_by_month(
             remaining -= n
         print(f"  {label}: {n:,} rows (total so far: {running:,})", flush=True)
         if not n:
+            if flush:
+                _mark_partition_complete(_partition_dir(out_dir, year, month))
             continue
 
         if "role_k17000_v3" in chunk.columns:
@@ -356,17 +382,20 @@ def _fetch_postings_by_month(
             )
 
         if flush:
+            _clear_incomplete_partition(out_dir, year, month)
             chunk = chunk.copy()
             chunk["year"] = year
             chunk["month"] = month
             _write_partitioned_parquet(chunk, out_dir, ["year", "month"])
+            _mark_partition_complete(_partition_dir(out_dir, year, month))
             print(f"  wrote partition year={year}/month={month}", flush=True)
             del chunk
         else:
             chunks.append(chunk)
 
     if flush:
-        return pd.DataFrame(), role_counts, rcids
+        _, role_counts, rcids_from_disk = _rcids_and_role_counts_from_postings_parquet(out_dir)
+        return pd.DataFrame(), role_counts, rcids_from_disk
     if not chunks:
         return pd.DataFrame(), role_counts, rcids
     return pd.concat(chunks, ignore_index=True), role_counts, rcids
@@ -466,7 +495,7 @@ def main() -> None:
                 resume=True,
             )
             postings_rows = int(sum(role_counts.values())) if role_counts else int(len(postings_df))
-            if postings_rows == 0 and not any(postings_out.rglob("*.parquet")):
+            if postings_rows == 0 and not _complete_parquet_paths(postings_out):
                 print("No posting rows returned; check date range, role allowlist, and WRDS access.", flush=True)
             elif not postings_df.empty:
                 postings_df["year"] = pd.to_datetime(postings_df["post_date"], errors="coerce").dt.year
@@ -486,7 +515,7 @@ def main() -> None:
                 company_sql = _build_simple_sql(cfg["tables"]["company_mapping"])
                 company_df = db.raw_sql(company_sql)
             else:
-                company_df = _fetch_company_mapping_for_postings(
+                company_df, db = _fetch_company_mapping_for_postings(
                     db, cfg, postings_df, rcids=posting_rcids or None
                 )
             _write_single_parquet(

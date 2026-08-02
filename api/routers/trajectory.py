@@ -1,11 +1,16 @@
 """Trajectory feature and label endpoints.
 
 NOTE ON ML HONESTY: the ML classifier (method="ml_classifier",
-method_version=ml-v1, see ml/constants.py) is an experimental baseline
-trained on limited history. Do not treat it as the primary trajectory
-signal in downstream products or dashboards until it clears an explicit
-accuracy/F1 metrics gate and is promoted via a method_version bump. Prefer
-method="phase1_rules" for anything user-facing until then.
+method_version from ml/constants.py METHOD_VERSION, currently ml-v2) is an
+experimental baseline trained on limited history. Do not treat it as the
+primary trajectory signal in downstream products or dashboards until it
+clears an explicit accuracy/F1 metrics gate and is promoted via a
+method_version bump. Prefer method="phase1_rules" for anything user-facing
+until then.
+
+The ML model artifact is cached in-process and reloaded automatically when
+its file mtime changes (e.g. after retraining). Set ML_MODEL_PATH to override
+the default artifact location.
 """
 
 import logging
@@ -40,7 +45,8 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/trajectory", tags=["trajectory"])
 
-_model_cache: dict[str, object] = {}
+# cache_key -> (model, artifact_mtime)
+_model_cache: dict[str, tuple[object, float]] = {}
 
 
 def _get_model_path() -> Path:
@@ -52,21 +58,29 @@ def _get_model_path() -> Path:
 
 
 def _load_cached_model():
-    """Load and cache the trajectory classifier, or None if missing."""
+    """Load and cache the trajectory classifier, or None if missing.
+
+    Reloads when the artifact file mtime changes so retrained models are picked
+    up without restarting the API process.
+    """
     model_path = _get_model_path()
     cache_key = str(model_path)
-    if cache_key in _model_cache:
-        return _model_cache[cache_key]
     if not model_path.exists():
         return None
+
+    mtime = model_path.stat().st_mtime
+    cached = _model_cache.get(cache_key)
+    if cached is not None and cached[1] == mtime:
+        return cached[0]
+
     model = load_model(model_path)
     _model_cache.clear()
-    _model_cache[cache_key] = model
+    _model_cache[cache_key] = (model, mtime)
     return model
 
 
 @router.get("/features", response_model=TrajectoryFeatureResponse)
-async def get_trajectory_features(
+def get_trajectory_features(
     entity_type: Optional[str] = Query(None, description="Entity type (e.g. role)"),
     entity_id: Optional[str] = Query(None, description="Entity identifier"),
     month: Optional[date] = Query(None, description="Filter by month (YYYY-MM-01)"),
@@ -112,7 +126,7 @@ async def get_trajectory_features(
 
 
 @router.get("/labels", response_model=TrajectoryLabelResponse)
-async def get_trajectory_labels(
+def get_trajectory_labels(
     entity_type: Optional[str] = Query(None, description="Entity type (e.g. role)"),
     entity_id: Optional[str] = Query(None, description="Entity identifier"),
     month: Optional[date] = Query(None, description="Filter by month (YYYY-MM-01)"),
@@ -162,7 +176,7 @@ async def get_trajectory_labels(
 
 
 @router.get("/predict", response_model=TrajectoryPredictionResponse)
-async def predict_trajectory(
+def predict_trajectory(
     entity_type: str = Query("role", description="Entity type (e.g. role)"),
     entity_id: str = Query(..., description="Entity identifier"),
     month: date = Query(..., description="Month (YYYY-MM-01)"),
@@ -175,9 +189,11 @@ async def predict_trajectory(
     """
     model = _load_cached_model()
     if model is None:
+        model_path = _get_model_path()
+        logger.warning("ML model artifact not found at %s", model_path)
         raise HTTPException(
             status_code=503,
-            detail=f"ML model artifact not found at {_get_model_path()}",
+            detail="ML model artifact not available",
         )
 
     query = """
