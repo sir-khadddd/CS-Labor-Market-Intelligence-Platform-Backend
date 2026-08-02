@@ -286,7 +286,27 @@ python scripts/build_duckdb.py
 python scripts/make_dev_snapshot.py
 python scripts/load_postgres.py --tables trajectory_features,trajectory_labels
 python scripts/train_trajectory_model.py --source postgres
+python scripts/predict_trajectory_model.py --source postgres
 ```
+
+## ML Label Rows Are Not Durable Across Loads
+
+`analytics.trajectory_labels` holds both rule labels (`method=phase1_rules`, produced by
+the DuckDB pipeline) and ML predictions (`method=ml_classifier`, produced by
+`scripts/predict_trajectory_model.py`). Only the rule labels exist in
+`data/processed/trajectory_labels.csv`.
+
+`scripts/load_postgres.py` reloads a table by `TRUNCATE` then `COPY`, so any run that
+includes `trajectory_labels` (including a full load with no `--tables`) deletes every
+`ml_classifier` row. `GET /api/v1/trajectory/labels?method=ml_classifier` returns nothing
+until predictions are regenerated:
+
+```bash
+python scripts/predict_trajectory_model.py --source postgres
+```
+
+Training is unaffected: `ml.data.join_trajectory_dataset` filters labels to
+`method=phase1_rules` before deduping, so ML rows are never used as training targets.
 
 ## Industry Dimension Note
 

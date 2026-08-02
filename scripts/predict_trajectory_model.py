@@ -6,6 +6,11 @@ trajectory_class per entity-month, and writes results into
 analytics.trajectory_labels tagged with method=ml_classifier. Writes are
 idempotent: existing rows for the same (entity_type, method_version) are
 replaced via delete-then-insert with an ON CONFLICT upsert as a safety net.
+
+These rows are not durable. scripts/load_postgres.py reloads analytics tables
+with TRUNCATE + COPY from data/processed CSVs, and those CSVs carry rule labels
+only, so any load that includes trajectory_labels deletes every ml_classifier
+row. Re-run this script after such a load to restore ML predictions.
 """
 
 from __future__ import annotations

@@ -27,6 +27,7 @@ from ml.constants import (
     CS_ALLOWLIST_VERSION,
     FEATURE_VERSION,
     LABEL_VERSION,
+    METHOD,
     RULES_METHOD_VERSION,
 )
 
@@ -174,6 +175,12 @@ def _copy_csv(cur: psycopg.Cursor, table_name: str, csv_path: Path) -> int:
     logger.info("Loading %s from %s (%.1f MB)", table_name, csv_path.name, size_mb)
 
     started = time.perf_counter()
+    if table_name == "trajectory_labels":
+        logger.warning(
+            "TRUNCATE of analytics.trajectory_labels removes method=%s rows, which are not "
+            "in the processed CSV. Re-run scripts/predict_trajectory_model.py after this load.",
+            METHOD,
+        )
     cur.execute(f"TRUNCATE TABLE analytics.{table_name};")
 
     row_count = 0

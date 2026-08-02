@@ -69,9 +69,16 @@ def join_trajectory_dataset(
     The join is inner by design: labels are forward-looking over
     LABEL_HORIZON_MONTHS, so the last months of the panel have features but no
     outcome yet and must be dropped from supervised training.
+
+    The method filter is applied before deduping so that high-confidence rows
+    from another method (e.g. ml_classifier predictions written back into
+    analytics.trajectory_labels) cannot displace the requested method's row for
+    the same entity-month and silently shrink or poison the training set.
     """
     features = features[features["feature_version"] == FEATURE_VERSION].copy()
     labels = labels[labels["label_version"] == LABEL_VERSION].copy()
+    if method is not None:
+        labels = labels[labels["method"] == method].copy()
 
     label_cols = [
         "entity_type",
@@ -93,8 +100,6 @@ def join_trajectory_dataset(
         how="inner",
     )
     merged = merged[merged["entity_type"] == entity_type].copy()
-    if method is not None:
-        merged = merged[merged["method"] == method].copy()
     return merged.reset_index(drop=True)
 
 
