@@ -1,6 +1,7 @@
 """FastAPI application factory and route registration."""
 
 import logging
+import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,6 +17,15 @@ from api.routers.trajectory import router as trajectory_router
 logger = logging.getLogger(__name__)
 
 
+def _cors_settings() -> tuple[list[str], bool]:
+    """Return (allow_origins, allow_credentials) from CORS_ORIGINS env."""
+    raw = os.getenv("CORS_ORIGINS")
+    if raw is None or not raw.strip():
+        return ["*"], False
+    origins = [origin.strip() for origin in raw.split(",") if origin.strip()]
+    return origins, True
+
+
 def create_app() -> FastAPI:
     """Create and configure FastAPI application."""
     app = FastAPI(
@@ -24,11 +34,11 @@ def create_app() -> FastAPI:
         version="1.0.0",
     )
 
-    # Add CORS middleware
+    allow_origins, allow_credentials = _cors_settings()
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # Configure as needed for production
-        allow_credentials=True,
+        allow_origins=allow_origins,
+        allow_credentials=allow_credentials,
         allow_methods=["*"],
         allow_headers=["*"],
     )

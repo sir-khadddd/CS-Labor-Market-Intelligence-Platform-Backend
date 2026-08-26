@@ -29,7 +29,13 @@ ANALYTICS_TABLES = (
 
 
 def get_postgres_dsn() -> str:
-    return os.getenv("CS_LMI_POSTGRES_DSN", DEFAULT_POSTGRES_DSN)
+    dsn = os.getenv("CS_LMI_POSTGRES_DSN")
+    if dsn:
+        return dsn
+    dsn = os.getenv("DATABASE_URL")
+    if dsn:
+        return dsn
+    return DEFAULT_POSTGRES_DSN
 
 
 def redact_postgres_dsn(dsn: str) -> str:
