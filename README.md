@@ -39,7 +39,7 @@ Approximate progress: **~90%** role demand stack, **~15%** inferred skill demand
 
 - [x] `postings_cosmos` extract — time (`post_date`), geo, industry, role, salary
 - [x] DuckDB marts + Postgres load for job demand, salary, trajectory features/labels
-- [x] FastAPI: job demand, salary, role-skills, skill-demand on **`feature/fastapi-setup`**; trajectory on **`feature/ml-trajectory-layer`**; richer health on **`main`**
+- [x] FastAPI on **`main`**: job demand, salary, role-skills, skill-demand, trajectory features/labels/predict; `/health` and `/health/db`
 - [x] Trajectory features at role-month grain (dedup fix); Phase 1 rule labels
 - [x] WRDS skill taxonomy discovery (`skill_k35000`, `individual_user_skill_lookup`)
 - [x] WRDS posting-skill scan — no native `skill_k35000` on `postings_cosmos`; text only in `postings_cosmos_raw`
@@ -130,12 +130,61 @@ pip install -r requirements.txt
 - `CS_LMI_REVELIO_ROOT` default: `data/raw_cs_snapshot`
 - `CS_LMI_DUCKDB_PATH` default: `data/local/cs_lmi.duckdb`
 - `CS_LMI_PROCESSED_DIR` default: `data/processed`
-- `CS_LMI_POSTGRES_DSN` default: `postgresql://postgres:postgres@localhost:5432/cs_lmi` (also used by the API via `config/postgres.py`)
-- `DATABASE_URL` optional alias for API if set (otherwise `CS_LMI_POSTGRES_DSN` applies)
+- `CS_LMI_POSTGRES_DSN` preferred Postgres DSN for the API and loader (default: `postgresql://postgres:postgres@localhost:5432/cs_lmi`)
+- `DATABASE_URL` optional alias; used when `CS_LMI_POSTGRES_DSN` is unset
+- `CORS_ORIGINS` comma-separated allowed browser origins for the API (e.g. `http://localhost:3000`); `*` disables credentials
+
+## First deployment
+
+Runbook for serving the API from **`main`** without WRDS. Assumes companion deploy changes are merged (`.env.example`, Dockerfile, loader `--input-dir`, `psycopg[binary,pool]`, router `Depends` wiring).
+
+### Environment
+
+1. Copy `.env.example` to `.env`.
+2. Set `CS_LMI_POSTGRES_DSN` (preferred) or `DATABASE_URL` for Postgres.
+3. Set `CORS_ORIGINS` for browser clients (comma-separated; `*` disables credentials).
+
+Pass DSN and CORS at container runtime—do not bake `.env` into images.
+
+### Dependencies
+
+Install `psycopg[binary,pool]>=3.2.0` (via `requirements.txt`) before building or running the Docker image; the API connection pool requires the `pool` extra.
+
+### Load data (no WRDS)
+
+```bash
+python scripts/load_postgres.py --input-dir data/dev_processed
+```
+
+Default input is `data/processed`; `data/dev_processed` is the bundled shareable snapshot. Missing CSVs raise `FileNotFoundError`.
+
+### Docker
+
+```bash
+docker build -t cs-lmi-api .
+docker run --rm -p 8000:8000 \
+  -e CS_LMI_POSTGRES_DSN="$CS_LMI_POSTGRES_DSN" \
+  -e CORS_ORIGINS="$CORS_ORIGINS" \
+  cs-lmi-api
+```
+
+Image base: `python:3.12-slim`. Process: `uvicorn api.main:app --host 0.0.0.0 --port 8000`. Container health check: `GET /health`.
+
+### Verify
+
+```bash
+curl http://localhost:8000/health
+curl http://localhost:8000/health/db
+```
+
+### Production caveats
+
+- **Skill demand / role-skills**: do not treat as production while `skill_id` is `UNK`.
+- **`GET /api/v1/trajectory/predict`**: requires `requirements-ml.txt` and a trained artifact under `ml/artifacts/`; returns **503** when the model file is missing.
 
 ## API (FastAPI)
 
-Serving layer reads aggregated tables from Postgres (`analytics.*`). **Endpoint development branch:** `feature/fastapi-setup` (see that branch’s README for the canonical route list). This doc also tracks `main` and ML branches.
+Serving layer on **`main`** reads aggregated tables from Postgres (`analytics.*`).
 
 **Run locally** (after `load_postgres.py`):
 
@@ -147,23 +196,12 @@ uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
 - Interactive docs: `http://localhost:8000/docs`
 - OpenAPI JSON: `http://localhost:8000/openapi.json`
 
-**Branch coverage**
-
-| Capability | Branch / merge target |
-|------------|------------------------|
-| Core analytics routes (job, skill, salary, role-skills) | **`feature/fastapi-setup`** → `main` |
-| Postgres pool | **`feature/fastapi-setup`** |
-| `/health` with Postgres status, `/health/db`, `config/postgres.py` | **`main`** (`feature/api-postgres-health`, merged) |
-| Trajectory routes | **`feature/ml-trajectory-layer`** |
-
 ### Implemented endpoints
-
-Analytics routes below are on **`feature/fastapi-setup`** unless noted.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/health` | Liveness on **`feature/fastapi-setup`**; on **`main`**, also reports Postgres connectivity |
-| `GET` | `/health/db` | Postgres health + `analytics.*` row counts (**`main` only**) |
+| `GET` | `/health` | Liveness + Postgres connectivity status |
+| `GET` | `/health/db` | Postgres health + `analytics.*` row counts |
 | `GET` | `/api/v1/info` | API name, version, top-level route prefixes |
 | `GET` | `/api/v1/job-demand` | CS job demand (`month`, `geo_id`, `industry_id`, `role_id`, pagination) |
 | `GET` | `/api/v1/job-demand/by-geo` | Top demand by geo for a required `month` |
@@ -177,13 +215,15 @@ Analytics routes below are on **`feature/fastapi-setup`** unless noted.
 | `GET` | `/api/v1/role-skills` | Role–skill associations (`month`, `role_id`, `skill_id`, `sort_by`) |
 | `GET` | `/api/v1/role-skills/strong-associations` | Associations with `lift` above `min_lift` for a `month` |
 | `GET` | `/api/v1/role-skills/{role_id}` | Top skills for a role by association strength |
-| `GET` | `/api/v1/trajectory/features` | Trajectory feature mart (`entity_type`, `entity_id`, `month`) — **`feature/ml-trajectory-layer`** |
-| `GET` | `/api/v1/trajectory/labels` | Trajectory labels (`method`, e.g. `phase1_rules`) — **`feature/ml-trajectory-layer`** |
+| `GET` | `/api/v1/trajectory/features` | Trajectory feature mart (`entity_type`, `entity_id`, `month`) |
+| `GET` | `/api/v1/trajectory/labels` | Trajectory labels (`method`, e.g. `phase1_rules`, `ml_classifier`) |
+| `GET` | `/api/v1/trajectory/predict` | ML trajectory prediction for an entity-month (503 without artifact) |
 
 **Data quality notes**
 
 - Skill and role–skill routes are wired but **`skill_id` is often `UNK`** until the inferred skill pilot lands; do not treat as production skill demand yet.
 - Trajectory panel is thin until role allowlist and extract history expand (see Roadmap).
+- `/api/v1/trajectory/predict` is an experimental baseline; rule labels remain the primary signal until metrics improve.
 
 ### Proposed endpoints (not implemented yet)
 
@@ -193,7 +233,6 @@ Analytics routes below are on **`feature/fastapi-setup`** unless noted.
 | `GET` | `/api/v1/skill-demand` (behavior) | Default exclude `skill_id IN ('UNK', 'Unknown')` |
 | `GET` | `/api/v1/skill-demand/by-skillset/{skill_k15}` | Roll up granular skills to Revelio `skill_k15` “skillset” |
 | `GET` | `/api/v1/skill-demand/by-geo/{geo_id}` | Skill demand map slice for Skillset dashboard |
-| `GET` | `/api/v1/trajectory/predictions` | Optional ML classifier output alongside rule labels |
 | `GET` | `/api/v1/market-summary` | Composite leaderboard (roles, skills, geos) for home view |
 
 ## End-to-End Local Run
