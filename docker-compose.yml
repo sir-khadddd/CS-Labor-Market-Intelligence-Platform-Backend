@@ -1,0 +1,42 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./sql/postgres/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ./sql/postgres/metadata_contracts.sql:/docker-entrypoint-initdb.d/02_metadata_contracts.sql:ro
+      - ./sql/postgres/indexes.sql:/docker-entrypoint-initdb.d/03_indexes.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - cs-lmi-net
+
+  api:
+    build: .
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    command: uvicorn api.main:app --reload --host 0.0.0.0 --port 8000
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - cs-lmi-net
+
+networks:
+  cs-lmi-net:
+
+volumes:
+  pgdata:
