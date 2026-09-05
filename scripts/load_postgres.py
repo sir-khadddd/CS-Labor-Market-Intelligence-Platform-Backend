@@ -210,9 +210,34 @@ def _copy_csv(cur: psycopg.Cursor, table_name: str, csv_path: Path) -> int:
     return loaded_rows
 
 
+def _resolve_input_dir(input_dir: Path | None) -> Path:
+    if input_dir is None:
+        return PROCESSED_DIR
+
+    path = Path(input_dir)
+    if not path.is_absolute():
+        path = (ROOT / path).resolve()
+    else:
+        path = path.resolve()
+
+    if not path.is_dir():
+        raise FileNotFoundError(f"Input directory does not exist: {path}")
+    return path
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Load processed analytics CSVs into Postgres."
+    )
+    parser.add_argument(
+        "--input-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Directory containing processed analytics CSVs "
+            f"(default: {PROCESSED_DIR.relative_to(ROOT)}). "
+            "Use data/dev_processed for first deploy without a full WRDS rebuild."
+        ),
     )
     parser.add_argument(
         "--tables",
@@ -294,6 +319,7 @@ def _load_one_table(conn: psycopg.Connection, table_name: str, csv_path: Path) -
 
 def main() -> None:
     args = parse_args()
+    input_dir = _resolve_input_dir(args.input_dir)
     tables = _resolve_tables(args.tables)
     full_rebuild = args.tables is None
 
@@ -303,7 +329,7 @@ def main() -> None:
     load_started = time.perf_counter()
 
     logger.info("Starting Postgres load (run_id=%s, dsn=%s)", run_id, safe_dsn)
-    logger.info("Processed CSV directory: %s", PROCESSED_DIR)
+    logger.info("Processed CSV directory: %s", input_dir)
     if full_rebuild:
         logger.info("Loading all configured analytics tables (full rebuild)")
     else:
@@ -331,9 +357,12 @@ def main() -> None:
         _setup_database(conn, full_rebuild=full_rebuild, selected_tables=tables)
 
         for table in tables:
-            csv_path = PROCESSED_DIR / f"{table}.csv"
+            csv_path = input_dir / f"{table}.csv"
             if not csv_path.exists():
-                raise FileNotFoundError(f"Missing processed CSV: {csv_path}")
+                raise FileNotFoundError(
+                    f"Missing processed CSV for {table}: {csv_path} "
+                    f"(input directory: {input_dir})"
+                )
             row_counts[table] = _load_one_table(conn, table, csv_path)
 
         with conn.cursor() as cur:
