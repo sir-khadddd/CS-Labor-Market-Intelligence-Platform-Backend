@@ -1,0 +1,42 @@
+# Secrets
+.env
+
+# Python
+.venv
+__pycache__
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info
+.pytest_cache
+.mypy_cache
+
+# Git
+.git
+.gitignore
+
+# Data (Postgres is external; no local snapshots in the image)
+data/raw*
+data/processed
+data/local
+data/dev_processed
+
+# ML artifacts (optional runtime mount)
+ml/artifacts
+
+# Agent / local junk
+*.pid
+load_postgres_detached.pid.txt
+scripts/_*.py
+.cursor
+
+# Not needed for API runtime
+tests/
+docs/
+scripts/
+sql/
+.github/
+requirements-dev.txt
+requirements-ml.txt
+README.md
