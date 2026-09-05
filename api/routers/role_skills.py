@@ -15,7 +15,7 @@ async def get_role_skill_associations(
     month: Optional[date] = Query(None),
     role_id: Optional[str] = Query(None),
     skill_id: Optional[str] = Query(None),
-    sort_by: Optional[str] = Query("lift", regex="^(lift|co_occurrence_count|p_skill_given_role)$"),
+    sort_by: Optional[str] = Query("lift", pattern="^(lift|co_occurrence_count|p_skill_given_role)$"),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     conn: Connection = Depends(get_postgres_connection), 
@@ -98,7 +98,7 @@ async def get_skills_for_role(
     role_id: str,
     month: Optional[date] = Query(None),
     min_lift: float = Query(0, description="Minimum lift threshold"),
-    sort_by: Optional[str] = Query("lift", regex="^(lift|co_occurrence_count|p_skill_given_role)$"),
+    sort_by: Optional[str] = Query("lift", pattern="^(lift|co_occurrence_count|p_skill_given_role)$"),
     limit: int = Query(50, ge=1, le=1000),
     conn: Connection = Depends(get_postgres_connection),
 ):
