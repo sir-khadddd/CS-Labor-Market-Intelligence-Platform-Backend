@@ -38,5 +38,4 @@ scripts/
 sql/
 .github/
 requirements-dev.txt
-requirements-ml.txt
 README.md
